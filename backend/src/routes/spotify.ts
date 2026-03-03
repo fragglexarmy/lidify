@@ -1,4 +1,6 @@
 import { Router } from "express";
+import multer from "multer";
+import path from "path";
 import { withRetry } from "../utils/async";
 import { logger } from "../utils/logger";
 import { requireAuthOrToken } from "../middleware/auth";
@@ -8,8 +10,22 @@ import { spotifyService } from "../services/spotify";
 import { spotifyImportService } from "../services/spotifyImport";
 import { deezerService } from "../services/deezer";
 import { readSessionLog, getSessionLogPath } from "../utils/playlistLogger";
+import { parseM3U } from "../services/m3uParser";
 
 const router = Router();
+
+const m3uUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 1 * 1024 * 1024, files: 1 },
+    fileFilter: (_req, file, cb) => {
+        const ext = path.extname(file.originalname).toLowerCase();
+        if ([".m3u", ".m3u8"].includes(ext)) {
+            cb(null, true);
+        } else {
+            cb(new Error("Only .m3u and .m3u8 files are accepted"));
+        }
+    },
+});
 
 // All routes require authentication
 router.use(requireAuthOrToken);
@@ -304,6 +320,42 @@ router.post("/import/:jobId/cancel", async (req, res) => {
         });
     } catch (error) {
         safeError(res, "Spotify cancel", error);
+    }
+});
+
+/**
+ * POST /api/spotify/import/m3u
+ * Upload an M3U file, parse it, match tracks against library, create playlist.
+ */
+router.post("/import/m3u", m3uUpload.single("file"), async (req, res) => {
+    try {
+        if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+        if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+        const playlistName = req.body.playlistName?.trim();
+        if (!playlistName || playlistName.length > 200) {
+            return res.status(400).json({ error: "playlistName is required (1-200 chars)" });
+        }
+
+        const content = req.file.buffer.toString("utf-8");
+        const entries = parseM3U(content);
+
+        if (entries.length === 0) {
+            return res.status(400).json({ error: "M3U file contains no entries" });
+        }
+
+        const result = await spotifyImportService.importFromM3U(
+            req.user.id,
+            playlistName,
+            entries,
+        );
+
+        res.json(result);
+    } catch (error: any) {
+        if (error.message?.includes("exceeds maximum") || error.message?.includes("null bytes")) {
+            return res.status(400).json({ error: error.message });
+        }
+        safeError(res, "M3U import", error);
     }
 });
 

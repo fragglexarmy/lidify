@@ -1,6 +1,8 @@
 import { randomUUID } from "crypto";
+import path from "path";
 import { withRetry } from "../utils/async";
 import pLimit from "p-limit";
+import * as fuzz from "fuzzball";
 import { spotifyService, SpotifyTrack, SpotifyPlaylist } from "./spotify";
 import { logger } from "../utils/logger";
 import { musicBrainzService } from "./musicbrainz";
@@ -17,6 +19,7 @@ import PQueue from "p-queue";
 import { acquisitionService } from "./acquisitionService";
 import { extractPrimaryArtist } from "../utils/artistNormalization";
 import { eventBus } from "./eventBus";
+import { M3UEntry } from "./m3uParser";
 
 // Store loggers for each job
 const jobLoggers = new Map<string, ReturnType<typeof createPlaylistLogger>>();
@@ -3121,6 +3124,178 @@ class SpotifyImportService {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Import a playlist from an M3U file.
+   * Matches entries against the local library using a 4-tier strategy:
+   *   1. Exact file path match (DB filePath is relative, strip common prefixes)
+   *   2. Filename match (basename without extension)
+   *   3. Exact metadata match (artist + title from EXTINF, case-insensitive)
+   *   4. Fuzzy metadata match (fuzzball token_set_ratio >= 80)
+   */
+  async importFromM3U(
+    userId: string,
+    playlistName: string,
+    entries: M3UEntry[],
+  ): Promise<{ playlistId: string; matched: number; unmatched: number; total: number }> {
+    const musicRoot = process.env.MUSIC_PATH || "/music";
+    const matchedTrackIds: string[] = [];
+    const unmatchedEntries: M3UEntry[] = [];
+
+    for (const entry of entries) {
+      let track: { id: string } | null = null;
+
+      // Tier 1: File path match
+      // DB stores paths relative to musicRoot (e.g. "Artist/Album/track.flac")
+      // M3U may have absolute paths like "/music/Artist/Album/track.flac"
+      let relativePath = entry.filePath;
+      const musicPrefix = musicRoot.endsWith("/") ? musicRoot : musicRoot + "/";
+      if (relativePath.startsWith(musicPrefix)) {
+        relativePath = relativePath.slice(musicPrefix.length);
+      } else if (relativePath.startsWith("/")) {
+        // Try stripping any leading /music/ variant
+        const stripped = relativePath.replace(/^\/music\/?/, "");
+        if (stripped !== relativePath) {
+          relativePath = stripped;
+        }
+      }
+
+      track = await prisma.track.findFirst({
+        where: { filePath: relativePath },
+        select: { id: true },
+      });
+
+      // Also try the original path as-is (in case DB stores absolute paths)
+      if (!track && relativePath !== entry.filePath) {
+        track = await prisma.track.findFirst({
+          where: { filePath: entry.filePath },
+          select: { id: true },
+        });
+      }
+
+      // Tier 2: Filename match (basename without extension)
+      if (!track) {
+        const basename = path.basename(entry.filePath, path.extname(entry.filePath));
+        if (basename.length >= 3) {
+          track = await prisma.track.findFirst({
+            where: { filePath: { endsWith: `/${basename}${path.extname(entry.filePath)}` } },
+            select: { id: true },
+          });
+        }
+      }
+
+      // Tier 3: Exact metadata match (artist + title from EXTINF)
+      if (!track && entry.artist && entry.title) {
+        track = await prisma.track.findFirst({
+          where: {
+            title: { equals: entry.title, mode: "insensitive" },
+            album: {
+              artist: {
+                name: { equals: entry.artist, mode: "insensitive" },
+              },
+            },
+          },
+          select: { id: true },
+        });
+
+        // Also try with normalizedName
+        if (!track) {
+          const normalizedArtist = normalizeString(entry.artist);
+          track = await prisma.track.findFirst({
+            where: {
+              title: { equals: entry.title, mode: "insensitive" },
+              album: {
+                artist: {
+                  normalizedName: normalizedArtist,
+                },
+              },
+            },
+            select: { id: true },
+          });
+        }
+      }
+
+      // Tier 4: Fuzzy metadata match (fuzzball >= 80 threshold)
+      if (!track && entry.artist && entry.title) {
+        const normalizedArtist = normalizeString(entry.artist);
+        const firstWord = normalizedArtist.split(" ")[0];
+        if (firstWord.length >= 3) {
+          const candidates = await prisma.track.findMany({
+            where: {
+              album: {
+                artist: {
+                  normalizedName: { contains: firstWord },
+                },
+              },
+            },
+            include: {
+              album: { include: { artist: { select: { name: true } } } },
+            },
+            take: 50,
+          });
+
+          let bestMatch: { id: string } | null = null;
+          let bestScore = 0;
+
+          for (const candidate of candidates) {
+            const titleScore = fuzz.token_set_ratio(
+              normalizeString(entry.title),
+              normalizeString(candidate.title),
+            );
+            const artistScore = fuzz.token_set_ratio(
+              normalizedArtist,
+              normalizeString(candidate.album.artist.name),
+            );
+            const combined = titleScore * 0.6 + artistScore * 0.4;
+
+            if (combined > bestScore && combined >= 80) {
+              bestScore = combined;
+              bestMatch = { id: candidate.id };
+            }
+          }
+
+          track = bestMatch;
+        }
+      }
+
+      if (track) {
+        matchedTrackIds.push(track.id);
+      } else {
+        unmatchedEntries.push(entry);
+      }
+    }
+
+    // Deduplicate
+    const uniqueTrackIds = [...new Set(matchedTrackIds)];
+
+    const playlist = await prisma.playlist.create({
+      data: {
+        userId,
+        name: playlistName,
+        isPublic: false,
+        items:
+          uniqueTrackIds.length > 0
+            ? {
+                create: uniqueTrackIds.map((trackId, index) => ({
+                  trackId,
+                  sort: index,
+                })),
+              }
+            : undefined,
+      },
+    });
+
+    logger.info(
+      `[M3U Import] Created playlist "${playlistName}" (${playlist.id}): ${uniqueTrackIds.length}/${entries.length} matched`,
+    );
+
+    return {
+      playlistId: playlist.id,
+      matched: uniqueTrackIds.length,
+      unmatched: unmatchedEntries.length,
+      total: entries.length,
+    };
   }
 }
 
