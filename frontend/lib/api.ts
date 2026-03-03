@@ -1751,7 +1751,7 @@ class ApiClient {
 
         const response = await fetch(`${this.getBaseUrl()}/api/spotify/import/m3u`, {
             method: "POST",
-            headers: { Authorization: `Bearer ${this.token}` },
+            headers: { Authorization: `Bearer ${this.getToken()}` },
             body: formData,
         });
 

@@ -457,7 +457,7 @@ router.post("/refresh-all", requireAuth, async (req, res) => {
                 await podcastQueue.add(
                     "refresh",
                     { podcastId: sub.podcastId, podcastTitle: sub.podcast.title },
-                    { jobId: `podcast-${sub.podcastId}` },
+                    { jobId: `podcast-${sub.podcastId}-${Date.now()}` },
                 );
                 queued++;
             } catch {
