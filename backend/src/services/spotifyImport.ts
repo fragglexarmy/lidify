@@ -1651,8 +1651,11 @@ class SpotifyImportService {
         // Poll checkImportCompletion until the job reaches a terminal state.
         // In-process Soulseek downloads complete inline, but Lidarr downloads
         // finish asynchronously via webhook. Poll every 15s, timeout at 30min.
+        // BullMQ auto-renews the lock every lockDuration/2 (5 min) as long as
+        // the event loop is responsive. The 15s sleep between polls ensures this.
         const POLL_INTERVAL_MS = 15_000;
         const MAX_WAIT_MS = 30 * 60 * 1000;
+        const TERMINAL_STATES = ["completed", "failed", "cancelled", "scanning", "creating_playlist"];
         const pollStart = Date.now();
 
         while (true) {
@@ -1664,14 +1667,13 @@ class SpotifyImportService {
             return;
           }
 
-          if (["completed", "failed", "cancelled"].includes(currentJob.status)) {
-            logger?.info(`Import job ${job.id} reached terminal state: ${currentJob.status}`);
+          if (TERMINAL_STATES.includes(currentJob.status)) {
+            logger?.info(`Import job ${job.id} handed off to next phase: ${currentJob.status}`);
             return;
           }
 
           if (Date.now() - pollStart > MAX_WAIT_MS) {
-            logger?.warn(`[Spotify Import] Job ${job.id}: timed out after 30 minutes, forcing completion`);
-            // Force completion with whatever we have
+            logger?.warn(`[Spotify Import] Job ${job.id}: timed out after 30 minutes, running final completion check`);
             await this.checkImportCompletion(job.id);
             return;
           }
