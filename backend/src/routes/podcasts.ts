@@ -434,6 +434,48 @@ router.get("/preview/:itunesId", requireAuth, async (req, res) => {
 });
 
 /**
+ * POST /podcasts/refresh-all
+ * Queue refresh jobs for all of the user's subscribed podcasts
+ */
+router.post("/refresh-all", requireAuth, async (req, res) => {
+    try {
+        const userId = req.user!.id;
+
+        const subscriptions = await prisma.podcastSubscription.findMany({
+            where: { userId },
+            select: { podcastId: true, podcast: { select: { id: true, title: true } } },
+        });
+
+        if (subscriptions.length === 0) {
+            return res.json({ queued: 0, message: "No subscribed podcasts" });
+        }
+
+        const { podcastQueue } = await import("../workers/enrichmentQueues");
+        let queued = 0;
+        for (const sub of subscriptions) {
+            try {
+                await podcastQueue.add(
+                    "refresh",
+                    { podcastId: sub.podcastId, podcastTitle: sub.podcast.title },
+                    { jobId: `podcast-${sub.podcastId}` },
+                );
+                queued++;
+            } catch {
+                // Job already queued (dedup by jobId) -- skip silently
+            }
+        }
+
+        res.json({
+            queued,
+            total: subscriptions.length,
+            message: `Queued ${queued} podcast${queued !== 1 ? "s" : ""} for refresh`,
+        });
+    } catch (error) {
+        safeError(res, "Error refreshing all podcasts", error);
+    }
+});
+
+/**
  * GET /podcasts/:id
  * Get a specific podcast with full details and episodes
  * Requires user to be subscribed
