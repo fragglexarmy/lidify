@@ -15,6 +15,11 @@ const createPlaylistSchema = z.object({
     isPublic: z.boolean().optional().default(false),
 });
 
+const updatePlaylistSchema = z.object({
+    name: z.string().min(1).max(200).optional(),
+    isPublic: z.boolean().optional(),
+});
+
 const addTrackSchema = z.object({
     trackId: z.string(),
 });
@@ -243,7 +248,7 @@ router.put("/:id", async (req, res) => {
             return res.status(401).json({ error: "Unauthorized" });
         }
         const userId = req.user.id;
-        const data = createPlaylistSchema.parse(req.body);
+        const data = updatePlaylistSchema.parse(req.body);
 
         // Check ownership
         const existing = await prisma.playlist.findUnique({
@@ -261,8 +266,8 @@ router.put("/:id", async (req, res) => {
         const playlist = await prisma.playlist.update({
             where: { id: req.params.id },
             data: {
-                name: data.name,
-                isPublic: data.isPublic,
+                ...(data.name !== undefined && { name: data.name }),
+                ...(data.isPublic !== undefined && { isPublic: data.isPublic }),
             },
         });
 
