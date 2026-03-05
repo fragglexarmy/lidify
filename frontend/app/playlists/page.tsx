@@ -329,16 +329,16 @@ function CreatePanel({ onClose }: { onClose: () => void }) {
 }
 
 function ImportUrlPanel({ onClose }: { onClose: () => void }) {
-    const router = useRouter();
     const [url, setUrl] = useState("");
     const [error, setError] = useState<string | null>(null);
+    const [isSubmitting, setIsSubmitting] = useState(false);
     const inputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         inputRef.current?.focus();
     }, []);
 
-    const handleSubmit = (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         const trimmed = url.trim();
         if (!trimmed) return;
@@ -355,8 +355,19 @@ function ImportUrlPanel({ onClose }: { onClose: () => void }) {
             return;
         }
 
-        onClose();
-        router.push(`/import/playlist?url=${encodeURIComponent(trimmed)}`);
+        setIsSubmitting(true);
+        setError(null);
+        try {
+            await api.post<{ jobId: string }>("/spotify/import/quick", { url: trimmed });
+            window.dispatchEvent(new CustomEvent("import-status-change", {
+                detail: { status: "started", playlistName: null }
+            }));
+            onClose();
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "Failed to start import");
+        } finally {
+            setIsSubmitting(false);
+        }
     };
 
     return (
@@ -368,18 +379,20 @@ function ImportUrlPanel({ onClose }: { onClose: () => void }) {
                 onChange={(e) => { setUrl(e.target.value); setError(null); }}
                 placeholder="Paste Spotify or Deezer playlist URL..."
                 className="flex-1 min-w-[220px] px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-[#fca208]/50 focus:ring-1 focus:ring-[#fca208]/30"
+                disabled={isSubmitting}
             />
             <button
                 type="submit"
-                disabled={!url.trim()}
+                disabled={!url.trim() || isSubmitting}
                 className="px-4 py-2 rounded-lg text-xs font-black bg-[#fca208] text-black hover:bg-[#f97316] transition-colors uppercase tracking-wider disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
             >
-                <Link2 className="w-3.5 h-3.5" />
+                {isSubmitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Link2 className="w-3.5 h-3.5" />}
                 Import
             </button>
             <button
                 type="button"
                 onClick={onClose}
+                disabled={isSubmitting}
                 className="px-3 py-2 rounded-lg text-xs font-mono text-white/40 hover:text-white/70 transition-colors"
             >
                 <X className="w-4 h-4" />

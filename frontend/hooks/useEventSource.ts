@@ -114,9 +114,13 @@ export function useEventSource() {
                                 ["import-status", data.jobId],
                                 data
                             );
+                            queryClient.invalidateQueries({ queryKey: ["user-imports"] });
                             if (data.status === "completed" || data.status === "failed" || data.status === "cancelled") {
                                 queryClient.invalidateQueries({ queryKey: ["notifications"] });
                                 queryClient.invalidateQueries({ queryKey: ["playlists"] });
+                                window.dispatchEvent(new CustomEvent("import-status-change", {
+                                    detail: { status: data.status, playlistName: data.playlistName, error: data.error }
+                                }));
                             }
                             break;
                         case "discover:progress":

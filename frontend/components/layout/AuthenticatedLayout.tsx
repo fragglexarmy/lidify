@@ -17,6 +17,7 @@ import { ReactNode } from "react";
 import { useIsMobile, useIsTablet } from "@/hooks/useMediaQuery";
 import { useIsTV } from "@/lib/tv-utils";
 import { useActivityPanel } from "@/hooks/useActivityPanel";
+import { useImportToasts } from "@/hooks/useImportToasts";
 
 const publicPaths = ["/login", "/register", "/onboarding", "/sync", "/share"];
 
@@ -29,6 +30,7 @@ export function AuthenticatedLayout({ children }: { children: ReactNode }) {
     const isMobileOrTablet = isMobile || isTablet;
     const activityPanel = useActivityPanel();
     const { toggle, open, close, setActiveTab } = activityPanel;
+    useImportToasts();
 
     // Listen for activity panel events (toggle/open/close/tab)
     useEffect(() => {
@@ -36,7 +38,7 @@ export function AuthenticatedLayout({ children }: { children: ReactNode }) {
         const handleOpen = () => open();
         const handleClose = () => close();
         const handleSetTab = (
-            e: CustomEvent<{ tab: "notifications" | "active" | "history" | "settings" }>
+            e: CustomEvent<{ tab: "notifications" | "active" | "imports" | "history" | "settings" }>
         ) => {
             setActiveTab(e.detail.tab);
         };

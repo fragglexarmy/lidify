@@ -958,6 +958,35 @@ class SpotifyService {
     }
 
     /**
+     * Fetch only the playlist name (lightweight, no track data).
+     */
+    async getPlaylistName(urlOrId: string): Promise<string | null> {
+        let playlistId = urlOrId;
+        const parsed = this.parseUrl(urlOrId);
+        if (parsed) playlistId = parsed.id;
+
+        const token = await this.getAnonymousToken();
+        if (!token) return null;
+
+        try {
+            const resp = await axios.get(
+                `https://api.spotify.com/v1/playlists/${playlistId}`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    },
+                    params: { fields: "name" },
+                    timeout: 5000,
+                },
+            );
+            return resp.data?.name || null;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
      * Get featured/popular playlists from Spotify
      * Uses multiple fallback approaches
      */

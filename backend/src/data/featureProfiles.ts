@@ -383,5 +383,3 @@ export const VOCAB_DEFINITIONS: Record<string, VocabTermDefinition> = {
     },
 };
 
-// Helper to get all term names
-export const VOCABULARY_TERMS = Object.keys(VOCAB_DEFINITIONS);

@@ -721,10 +721,21 @@ export class MusicScannerService {
                         logger.debug(
                             `[SCANNER] Consolidating temp artist "${tempArtist.name}" with real MBID: ${artistMbid}`
                         );
-                        artist = await prisma.artist.update({
-                            where: { id: tempArtist.id },
-                            data: { mbid: artistMbid },
-                        });
+                        try {
+                            artist = await prisma.artist.update({
+                                where: { id: tempArtist.id },
+                                data: { mbid: artistMbid },
+                            });
+                        } catch (mbidError: any) {
+                            if (mbidError.code === "P2002") {
+                                logger.debug(
+                                    `[SCANNER] MBID ${artistMbid} already used by another artist, keeping temp`
+                                );
+                                artist = tempArtist;
+                            } else {
+                                throw mbidError;
+                            }
+                        }
                     }
                 }
             }

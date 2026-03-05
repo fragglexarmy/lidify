@@ -147,16 +147,23 @@ export default function BrowsePlaylistsPage() {
         setIsParsing(true);
 
         try {
+            // Parse URL first to validate it
             const response = await api.post<{
                 source: string;
                 id: string;
                 url: string;
             }>("/browse/playlists/parse", { url: urlInput.trim() });
+
+            // Fire background import
+            await api.post<{ jobId: string }>("/spotify/import/quick", {
+                url: response.url,
+            });
+
             setShowUrlModal(false);
             setUrlInput("");
-            router.push(
-                `/import/playlist?url=${encodeURIComponent(response.url)}`,
-            );
+            window.dispatchEvent(new CustomEvent("import-status-change", {
+                detail: { status: "started", playlistName: null }
+            }));
         } catch (error: unknown) {
             const message =
                 error instanceof Error ? error.message : "Invalid playlist URL";

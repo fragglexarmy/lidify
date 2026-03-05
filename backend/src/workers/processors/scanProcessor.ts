@@ -192,7 +192,7 @@ export async function processScan(
     );
 
     // Create scanner with progress callback and cover cache path
-    let lastEmittedPercent = -2;
+    let lastEmittedPercent = -1;
     const scanner = new MusicScannerService((progress) => {
         const percent = Math.floor(
             (progress.filesScanned / progress.filesTotal) * 100
@@ -200,8 +200,8 @@ export async function processScan(
         job.updateProgress(percent).catch((err) =>
             logger.error(`Failed to update job progress:`, err)
         );
-        // Emit SSE every 2% to avoid flooding
-        if (userId && percent >= lastEmittedPercent + 2) {
+        // Emit SSE every 1% for smooth progress
+        if (userId && percent >= lastEmittedPercent + 1) {
             lastEmittedPercent = percent;
             eventBus.emit({
                 type: "scan:progress",

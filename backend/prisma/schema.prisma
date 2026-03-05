@@ -525,6 +525,7 @@ model SpotifyImportJob {
   tracksDownloadable Int      @default(0)
   createdPlaylistId  String?
   error              String?
+  sourceUrl          String?
   pendingTracks      Json
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt

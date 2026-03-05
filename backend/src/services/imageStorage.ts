@@ -104,20 +104,6 @@ export function getLocalImagePath(nativePath: string): string | null {
     return fullPath;
 }
 
-/**
- * Delete a local image
- */
-export function deleteLocalImage(nativePath: string): boolean {
-    const fullPath = getLocalImagePath(nativePath);
-    if (!fullPath) return false;
-
-    try {
-        fs.unlinkSync(fullPath);
-        return true;
-    } catch {
-        return false;
-    }
-}
 
 /**
  * Check for a local artist image file in the artist's music directory.
@@ -160,13 +146,6 @@ export async function checkLocalArtistImage(
     return null;
 }
 
-/**
- * Check if a URL is an external URL (not already local)
- */
-export function isExternalUrl(url: string | null | undefined): boolean {
-    if (!url) return false;
-    return url.startsWith("http://") || url.startsWith("https://");
-}
 
 /**
  * Check if a URL is a native local path

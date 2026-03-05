@@ -14,6 +14,7 @@ import {
     ExternalLink,
     ChevronDown,
     ChevronUp,
+    Zap,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
@@ -81,6 +82,7 @@ interface ImportJob {
     id: string;
     status:
         | "pending"
+        | "fetching"
         | "downloading"
         | "scanning"
         | "creating_playlist"
@@ -99,6 +101,8 @@ interface ImportJob {
 }
 
 type Step = "input" | "previewing" | "preview" | "importing" | "complete";
+
+const TERMINAL_IMPORT_STATUSES = ["completed", "failed", "cancelled"];
 
 function ImportPlaylistPageContent() {
     const router = useRouter();
@@ -126,33 +130,55 @@ function ImportPlaylistPageContent() {
     >("matched");
 
 
-    // Auto-fetch preview if URL is provided in query params
+    // Pre-fill URL from query params and reconnect to active import if one exists
     useEffect(() => {
         const urlParam = searchParams.get("url");
         if (urlParam && !hasAutoFetched.current) {
             hasAutoFetched.current = true;
             setUrl(urlParam);
+
+            // Check if there's already an active import for this URL
+            let normalizedPath: string;
+            try {
+                normalizedPath = new URL(urlParam).host + new URL(urlParam).pathname.replace(/\/+$/, "");
+            } catch {
+                normalizedPath = urlParam;
+            }
+
             (async () => {
-                setIsLoading(true);
                 try {
-                    const { jobId } = await api.post<{ jobId: string }>(
-                        "/spotify/preview/start",
-                        { url: urlParam }
+                    const jobs = await api.get<Array<{
+                        id: string; status: string; sourceUrl: string | null;
+                        playlistName: string; progress: number; albumsTotal: number;
+                        albumsCompleted: number; tracksMatched: number; tracksTotal: number;
+                        tracksDownloadable: number; createdPlaylistId: string | null; error: string | null;
+                    }>>("/spotify/imports");
+                    const activeStatuses = ["pending", "fetching", "downloading", "scanning", "creating_playlist", "matching_tracks"];
+                    const activeJob = jobs.find(
+                        (j) => activeStatuses.includes(j.status) && j.sourceUrl === normalizedPath,
                     );
-                    setPreviewJobId(jobId);
-                    setStep("previewing");
-                } catch (err) {
-                    const message =
-                        err instanceof Error
-                            ? err.message
-                            : "Failed to start preview";
-                    toast.error(message);
-                } finally {
-                    setIsLoading(false);
+                    if (activeJob) {
+                        setImportJob({
+                            id: activeJob.id,
+                            status: activeJob.status as ImportJob["status"],
+                            progress: activeJob.progress,
+                            albumsTotal: activeJob.albumsTotal,
+                            albumsCompleted: activeJob.albumsCompleted,
+                            tracksMatched: activeJob.tracksMatched,
+                            tracksTotal: activeJob.tracksTotal,
+                            tracksDownloadable: activeJob.tracksDownloadable,
+                            createdPlaylistId: activeJob.createdPlaylistId,
+                            error: activeJob.error,
+                        });
+                        setPlaylistName(activeJob.playlistName);
+                        setStep("importing");
+                    }
+                } catch {
+                    // If fetch fails, just show the input form with pre-filled URL
                 }
             })();
         }
-    }, [searchParams, toast]);
+    }, [searchParams]);
 
     // Preview status — SSE is primary delivery, HTTP poll is fallback for reconnects.
     // If SSE already populated the cache, the poll sees the terminal status and stops.
@@ -194,11 +220,21 @@ function ImportPlaylistPageContent() {
         }
     }, [ssePreviewStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // SSE-populated import status (populated by useEventSource via queryClient.setQueryData)
+    // Import status: SSE populates cache, HTTP polls as fallback (mirrors preview-status pattern)
     const { data: sseImportStatus } = useQuery<(ImportJob & { jobId?: string }) | null>({
         queryKey: ["import-status", importJob?.id],
-        queryFn: () => queryClient.getQueryData(["import-status", importJob?.id]) ?? null,
-        enabled: !!importJob && importJob.status !== "completed" && importJob.status !== "failed" && importJob.status !== "cancelled",
+        queryFn: async () => {
+            const cached = queryClient.getQueryData<ImportJob & { jobId?: string }>(["import-status", importJob?.id]);
+            if (cached && TERMINAL_IMPORT_STATUSES.includes(cached.status)) return cached;
+            if (!importJob?.id) return null;
+            return api.get<ImportJob & { jobId?: string }>(`/spotify/import/${importJob.id}/status`);
+        },
+        enabled: !!importJob && !TERMINAL_IMPORT_STATUSES.includes(importJob.status),
+        refetchInterval: (query) => {
+            const d = query.state.data;
+            if (d && TERMINAL_IMPORT_STATUSES.includes(d.status)) return false;
+            return 3000;
+        },
         staleTime: Infinity,
         refetchOnWindowFocus: false,
     });
@@ -210,11 +246,12 @@ function ImportPlaylistPageContent() {
         const updated: ImportJob = {
             ...importJob,
             status: sseImportStatus.status,
-            progress: sseImportStatus.progress,
-            albumsCompleted: sseImportStatus.albumsCompleted,
-            tracksMatched: sseImportStatus.tracksMatched,
-            createdPlaylistId: sseImportStatus.createdPlaylistId,
-            error: sseImportStatus.error,
+            progress: sseImportStatus.progress ?? importJob.progress,
+            albumsTotal: sseImportStatus.albumsTotal ?? importJob.albumsTotal,
+            albumsCompleted: sseImportStatus.albumsCompleted ?? importJob.albumsCompleted,
+            tracksMatched: sseImportStatus.tracksMatched ?? importJob.tracksMatched,
+            createdPlaylistId: sseImportStatus.createdPlaylistId ?? importJob.createdPlaylistId,
+            error: sseImportStatus.error ?? importJob.error,
         };
         setImportJob(updated);
 
@@ -248,6 +285,42 @@ function ImportPlaylistPageContent() {
         } catch (err) {
             const message =
                 err instanceof Error ? err.message : "Failed to start preview";
+            toast.error(message);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    // Quick import (skip preview, import everything in background)
+    const handleQuickImport = async () => {
+        if (!url.trim()) {
+            toast.error("Please enter a playlist URL");
+            return;
+        }
+
+        setIsLoading(true);
+        try {
+            const { jobId } = await api.post<{ jobId: string }>(
+                "/spotify/import/quick",
+                { url }
+            );
+
+            setImportJob({
+                id: jobId,
+                status: "pending",
+                progress: 0,
+                albumsTotal: 0,
+                albumsCompleted: 0,
+                tracksMatched: 0,
+                tracksTotal: 0,
+                tracksDownloadable: 0,
+                createdPlaylistId: null,
+                error: null,
+            });
+            setStep("importing");
+        } catch (err) {
+            const message =
+                err instanceof Error ? err.message : "Failed to start import";
             toast.error(message);
         } finally {
             setIsLoading(false);
@@ -428,20 +501,39 @@ function ImportPlaylistPageContent() {
                                 playlist URL
                             </p>
                         </div>
-                        <button
-                            onClick={handleFetchPreview}
-                            disabled={isLoading || !url.trim()}
-                            className="w-full py-3 rounded-full font-medium bg-[#ecb200] text-black hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
-                        >
-                            {isLoading ? (
-                                <>
-                                    <Loader2 className="w-4 h-4 animate-spin" />
-                                    Loading...
-                                </>
-                            ) : (
-                                "Continue"
-                            )}
-                        </button>
+                        <div className="flex gap-3">
+                            <button
+                                onClick={handleFetchPreview}
+                                disabled={isLoading || !url.trim()}
+                                className="flex-1 py-3 rounded-full font-medium bg-white/10 text-white hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
+                            >
+                                {isLoading ? (
+                                    <>
+                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                        Loading...
+                                    </>
+                                ) : (
+                                    "Preview First"
+                                )}
+                            </button>
+                            <button
+                                onClick={handleQuickImport}
+                                disabled={isLoading || !url.trim()}
+                                className="flex-1 py-3 rounded-full font-medium bg-[#ecb200] text-black hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
+                            >
+                                {isLoading ? (
+                                    <>
+                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                        Loading...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Zap className="w-4 h-4" />
+                                        Import Now
+                                    </>
+                                )}
+                            </button>
+                        </div>
                     </div>
                 )}
 
@@ -857,7 +949,9 @@ function ImportPlaylistPageContent() {
                     <div className="text-center py-12">
                         <Loader2 className="w-10 h-10 text-[#1DB954] animate-spin mx-auto mb-4" />
                         <h2 className="text-lg font-bold text-white mb-1">
-                            {importJob.status === "downloading"
+                            {importJob.status === "fetching"
+                                ? "Fetching Playlist"
+                                : importJob.status === "downloading"
                                 ? "Queueing Album Downloads"
                                 : importJob.status === "scanning"
                                 ? "Scanning Library"
@@ -865,10 +959,13 @@ function ImportPlaylistPageContent() {
                                   importJob.status === "matching_tracks"
                                 ? "Creating Playlist"
                                 : importJob.status === "pending"
-                                ? "Waiting for Downloads"
+                                ? "Starting Import"
                                 : "Starting Import"}
                         </h2>
                         <p className="text-sm text-gray-400 mb-6">
+                            {importJob.status === "fetching" && (
+                                <>Fetching tracks and matching to your library...</>
+                            )}
                             {importJob.status === "downloading" && (
                                 <>
                                     Queued {importJob.albumsCompleted} of{" "}
@@ -877,10 +974,9 @@ function ImportPlaylistPageContent() {
                             )}
                             {importJob.status === "pending" && (
                                 <>
-                                    Waiting for{" "}
-                                    {importJob.albumsTotal -
-                                        importJob.albumsCompleted}{" "}
-                                    downloads to complete
+                                    {importJob.albumsTotal > 0
+                                        ? `Waiting for ${importJob.albumsTotal - importJob.albumsCompleted} downloads to complete`
+                                        : "Preparing import..."}
                                 </>
                             )}
                             {importJob.status === "scanning" && (

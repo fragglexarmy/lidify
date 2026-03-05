@@ -44,6 +44,11 @@ const importSchema = z.object({
     previewJobId: z.string().optional(),
 });
 
+const quickImportSchema = z.object({
+    url: z.string().url(),
+    playlistName: z.string().min(1).max(200).optional(),
+});
+
 /**
  * POST /api/spotify/parse
  * Parse a Spotify URL and return basic info
@@ -122,6 +127,35 @@ router.get("/preview/:jobId", async (req, res) => {
         res.json(result);
     } catch (error) {
         safeError(res, "Playlist preview fetch", error);
+    }
+});
+
+/**
+ * POST /api/spotify/import/quick
+ * Fire-and-forget import: skip preview, fetch + match + download all in background
+ */
+router.post("/import/quick", async (req, res) => {
+    try {
+        if (!req.user) {
+            return res.status(401).json({ error: "Unauthorized" });
+        }
+        const { url, playlistName } = quickImportSchema.parse(req.body);
+
+        const isValidUrl = url.includes("spotify.com/playlist/") || url.includes("deezer.com/playlist/") || url.includes("deezer.com/playlist:");
+        if (!isValidUrl) {
+            return res.status(400).json({
+                error: "Invalid playlist URL. Provide a Spotify or Deezer playlist URL.",
+            });
+        }
+
+        const { jobId } = await spotifyImportService.quickImport(url, req.user.id, playlistName);
+
+        res.json({ jobId });
+    } catch (error) {
+        if (error instanceof Error && error.name === "ZodError") {
+            return res.status(400).json({ error: "Invalid request body" });
+        }
+        safeError(res, "Quick import", error);
     }
 });
 
@@ -291,7 +325,7 @@ router.post("/import/:jobId/refresh", async (req, res) => {
 
 /**
  * POST /api/spotify/import/:jobId/cancel
- * Cancel an import job and create playlist with whatever succeeded
+ * Cancel an import job and clean up all artifacts
  */
 router.post("/import/:jobId/cancel", async (req, res) => {
     try {
@@ -315,7 +349,7 @@ router.post("/import/:jobId/cancel", async (req, res) => {
         res.json({
             message: result.playlistCreated
                 ? `Import cancelled. Playlist created with ${result.tracksMatched} track(s).`
-                : "Import cancelled. No tracks were downloaded.",
+                : "Import cancelled.",
             playlistId: result.playlistId,
             tracksMatched: result.tracksMatched,
         });

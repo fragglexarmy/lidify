@@ -49,13 +49,21 @@ export async function enrichSimilarArtist(artist: Artist): Promise<void> {
                     );
 
                     // Update artist with real MBID
-                    await prisma.artist.update({
-                        where: { id: artist.id },
-                        data: { mbid: realMbid },
-                    });
-
-                    // Update the local artist object
-                    artist.mbid = realMbid;
+                    try {
+                        await prisma.artist.update({
+                            where: { id: artist.id },
+                            data: { mbid: realMbid },
+                        });
+                        artist.mbid = realMbid;
+                    } catch (mbidError: any) {
+                        if (mbidError.code === "P2002") {
+                            logger.debug(
+                                `${logPrefix} MBID ${realMbid} already used by another artist, keeping temp`
+                            );
+                        } else {
+                            throw mbidError;
+                        }
+                    }
                 } else {
                     logger.debug(
                         `${logPrefix} MusicBrainz: No match found, marking as unresolvable`

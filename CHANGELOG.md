@@ -5,7 +5,7 @@ All notable changes to Kima will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.6.2] - 2026-03-03
+## [1.6.2] - 2026-03-05
 
 Closes #32. Partially addresses #25, #90, #124, #139.
 
@@ -13,6 +13,11 @@ Closes #32. Partially addresses #25, #90, #124, #139.
 
 - **Skip MusicBrainz when Lidarr disabled (#90, #124)**: Playlist imports no longer call MusicBrainz for MBID resolution when Lidarr is not configured. Soulseek searches by artist+album+track text and never uses MBIDs, so MB API calls were pure waste for Soulseek-only users. A 170-song import that took ~15 minutes now generates its preview in seconds. Albums without MBIDs route directly to Soulseek instead of being blocked or misrouted to track-based acquisition.
 - **Import cancellation with AbortSignal**: Cancelling a playlist import now immediately aborts all in-flight and queued Soulseek searches and downloads. Previously, `cancelJob()` only marked DB records as failed while rate-limiter-queued searches continued executing for minutes. AbortSignal threads from `cancelJob()` through the PQueue album pipeline, acquisition service, rate limiter, search strategies, and download retry loop.
+- **Background playlist imports**: Importing a playlist URL no longer navigates to a full-page progress screen. Imports fire in the background with a toast notification, and the user stays on their current page. Completion, failure, and cancellation show toast notifications via SSE events.
+- **Import URL dedup**: Submitting the same playlist URL while an import is already active returns the existing job instead of creating a duplicate. URLs are normalized (host + pathname, trailing slashes stripped) for reliable matching.
+- **Imports management tab**: New "Imports" tab in the Activity Panel shows all active and past imports with real-time progress bars, status badges, cancel buttons, and links to created playlists.
+- **Import page reconnect**: Refreshing `/import/playlist` while an import is running reconnects to the active job's progress instead of showing a blank form.
+- **Early playlist name resolution**: Quick imports now fetch the real playlist name from Spotify/Deezer before enqueueing, so the Imports tab shows the actual name immediately instead of a generic placeholder.
 
 - **Playlist action hub**: Create, Import URL, Import File (M3U), and Browse buttons directly on the playlists page. No more navigating through Browse to import.
 - **Sidebar create playlist**: The "+" button in the sidebar now opens an inline create dialog instead of navigating away.
@@ -27,11 +32,22 @@ Closes #32. Partially addresses #25, #90, #124, #139.
 ### Changed
 
 - **Route rename**: `/library` is now `/collection` (redirects preserved). `/import/spotify` is now `/import/playlist` (redirects preserved with query params).
+- **Onboarding simplified to 2 steps**: Removed the informational step 3 (enrichment/analysis features). Onboarding is now Account + Integrations, with "Complete Setup" finishing directly from step 2.
+- **Smoother sync progress bar**: SSE events now emit every 1% instead of 2%, and polling fallback tightened from 2s to 500ms. Progress bar reflects real scan data at higher resolution.
+- **Import cancel cleanup**: Cancelling an import now fully removes all DB records, Redis cache entries, and BullMQ jobs. Failed imports with zero matched tracks also clean up automatically. Partial failures preserve matched tracks.
 
 ### Fixed
 
+- **Security: hardcoded Last.fm API key removed**: Default fallback API key removed from source code. `LASTFM_API_KEY` environment variable is now required for Last.fm enrichment.
+
+### Removed
+
+- Dead code cleanup: removed 3 unused service files (`openai.ts`, `fileValidator.ts`, `Skeleton.tsx`), 16 unused exports across utils/middleware/workers, and debug console.logs from Soulseek search hook.
+
 - **Spotify 100-track pagination**: Anonymous Spotify tokens cap `tracks.total` at 100, preventing pagination from triggering. Now speculatively fetches additional pages when a full page of results is received, bypassing the cap for playlists of any size.
 - **Playlist partial update schema**: `PUT /playlists/:id` previously required `name` in every request body (using create schema). Now uses a dedicated update schema where both `name` and `isPublic` are optional, supporting partial updates without resetting unrelated fields.
+- **Artist MBID race condition**: Concurrent enrichment workers could both check that an MBID was free, then both try to claim it, crashing the second worker with a unique constraint violation. All four MBID write sites now catch Prisma `P2002` errors and gracefully skip the MBID update while preserving other enrichment data.
+- **Double import on page refresh**: Refreshing `/import/playlist` while an import was running fired a second import for the same URL. Removed auto-start behavior; the page now checks for active imports and reconnects to them.
 
 ## [1.6.1] - 2026-03-03
 

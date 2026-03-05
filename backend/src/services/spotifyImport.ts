@@ -80,6 +80,7 @@ export interface ImportJob {
   playlistName: string;
   status:
     | "pending"
+    | "fetching"
     | "downloading"
     | "scanning"
     | "creating_playlist"
@@ -95,6 +96,7 @@ export interface ImportJob {
   tracksDownloadable: number; // Tracks from albums being downloaded
   createdPlaylistId: string | null;
   error: string | null;
+  sourceUrl: string | null;
   createdAt: Date;
   updatedAt: Date;
   // Store the original track list so we can match after downloads
@@ -117,6 +119,20 @@ const PREVIEW_JOB_KEY = (id: string) => `preview:job:${id}`;
 const PREVIEW_JOB_TTL = 2 * 60 * 60; // 2 hours
 
 /**
+ * Extract a readable hint from a playlist URL to show before the real name resolves.
+ */
+function extractPlaylistHint(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname.includes("spotify")) return "Spotify Playlist";
+    if (parsed.hostname.includes("deezer")) return "Deezer Playlist";
+    return "Playlist Import";
+  } catch {
+    return "Playlist Import";
+  }
+}
+
+/**
  * Save import job to both database and Redis cache for cross-process sharing
  */
 async function saveImportJob(job: ImportJob): Promise<void> {
@@ -137,13 +153,18 @@ async function saveImportJob(job: ImportJob): Promise<void> {
       tracksDownloadable: job.tracksDownloadable,
       createdPlaylistId: job.createdPlaylistId,
       error: job.error,
+      sourceUrl: job.sourceUrl,
       pendingTracks: job.pendingTracks as any,
     },
     update: {
+      playlistName: job.playlistName,
       status: job.status,
       progress: job.progress,
+      albumsTotal: job.albumsTotal,
       albumsCompleted: job.albumsCompleted,
       tracksMatched: job.tracksMatched,
+      tracksTotal: job.tracksTotal,
+      tracksDownloadable: job.tracksDownloadable,
       createdPlaylistId: job.createdPlaylistId,
       error: job.error,
       updatedAt: new Date(),
@@ -168,6 +189,7 @@ async function saveImportJob(job: ImportJob): Promise<void> {
     userId: job.userId,
     payload: {
       jobId: job.id,
+      playlistName: job.playlistName,
       status: job.status,
       progress: job.progress,
       albumsTotal: job.albumsTotal,
@@ -222,6 +244,7 @@ async function getImportJob(importJobId: string): Promise<ImportJob | null> {
     tracksDownloadable: dbJob.tracksDownloadable,
     createdPlaylistId: dbJob.createdPlaylistId,
     error: dbJob.error,
+    sourceUrl: dbJob.sourceUrl,
     createdAt: dbJob.createdAt,
     updatedAt: dbJob.updatedAt,
     pendingTracks: (dbJob.pendingTracks as any) || [],
@@ -1262,6 +1285,90 @@ class SpotifyImportService {
   /**
    * Start an import job
    */
+  /**
+   * Build the pendingTracks array from a preview's matched tracks.
+   * Shared between startImport and processQuickImportFromQueue.
+   */
+  private buildPendingTracks(
+    preview: ImportPreview,
+  ): ImportJob["pendingTracks"] {
+    return preview.matchedTracks.map((m) => {
+      const spotifyAlbum = m.spotifyTrack.album;
+      const spotifyAlbumId = m.spotifyTrack.albumId;
+      const spotifyArtist = m.spotifyTrack.artist;
+      const spotifyTrackId = m.spotifyTrack.spotifyId;
+      const trackTitle = m.spotifyTrack.title;
+
+      const wasMbResolved = spotifyAlbumId?.startsWith("mbid:");
+      const resolvedMbid = wasMbResolved
+        ? spotifyAlbumId.replace("mbid:", "")
+        : null;
+
+      let albumToDownload: AlbumToDownload | undefined;
+
+      // Strategy 1: Match by resolved MusicBrainz MBID
+      if (resolvedMbid) {
+        albumToDownload = preview.albumsToDownload.find(
+          (a) => a.albumMbid === resolvedMbid,
+        );
+      }
+
+      // Strategy 2: Match by Spotify album ID
+      if (!albumToDownload && spotifyAlbumId && !wasMbResolved) {
+        albumToDownload = preview.albumsToDownload.find(
+          (a) => a.spotifyAlbumId === spotifyAlbumId,
+        );
+      }
+
+      // Strategy 3: Find album that contains this specific track
+      if (!albumToDownload) {
+        albumToDownload = preview.albumsToDownload.find((a) =>
+          a.tracksNeeded.some(
+            (t) =>
+              t.spotifyId === spotifyTrackId ||
+              (t.title.toLowerCase() === trackTitle.toLowerCase() &&
+                t.artist.toLowerCase() === spotifyArtist.toLowerCase()),
+          ),
+        );
+      }
+
+      // Strategy 4: Match by artist + album name similarity
+      if (
+        !albumToDownload &&
+        spotifyArtist &&
+        spotifyAlbum &&
+        spotifyAlbum !== "Unknown Album"
+      ) {
+        const normalizedArtist = spotifyArtist.toLowerCase();
+        const normalizedAlbum = spotifyAlbum.toLowerCase();
+        albumToDownload = preview.albumsToDownload.find(
+          (a) =>
+            a.artistName.toLowerCase() === normalizedArtist &&
+            a.albumName
+              .toLowerCase()
+              .includes(normalizedAlbum.substring(0, 10)),
+        );
+      }
+
+      const albumForDisplay =
+        spotifyAlbum && spotifyAlbum !== "Unknown Album"
+          ? spotifyAlbum
+          : albumToDownload?.albumName || spotifyAlbum;
+
+      const actualAlbumMbid =
+        resolvedMbid || albumToDownload?.albumMbid || null;
+
+      return {
+        artist: spotifyArtist,
+        title: trackTitle,
+        album: albumForDisplay,
+        albumMbid: actualAlbumMbid,
+        artistMbid: albumToDownload?.artistMbid || null,
+        preMatchedTrackId: m.localTrack?.id || null,
+      };
+    });
+  }
+
   async startImport(
     userId: string,
     spotifyPlaylistId: string,
@@ -1309,90 +1416,7 @@ class SpotifyImportService {
       )
       .reduce((sum, a) => sum + a.tracksNeeded.length, 0);
 
-    // Extract the track info we need to match after downloads
-    // Include ALL tracks, both matched and unmatched
-    // IMPORTANT: Store pre-matched track IDs so we don't have to re-search them!
-    // NOTE: `PlaylistPendingTrack.spotifyAlbum` should reflect Spotify's album name.
-    // Only fall back to a resolved album name when Spotify returns "Unknown Album".
-    const pendingTracks = preview.matchedTracks.map((m) => {
-      const spotifyAlbum = m.spotifyTrack.album;
-      const spotifyAlbumId = m.spotifyTrack.albumId;
-      const spotifyArtist = m.spotifyTrack.artist;
-      const spotifyTrackId = m.spotifyTrack.spotifyId;
-      const trackTitle = m.spotifyTrack.title;
-
-      // Check if album was resolved via MusicBrainz (albumId has mbid: prefix)
-      const wasMbResolved = spotifyAlbumId?.startsWith("mbid:");
-      const resolvedMbid = wasMbResolved
-        ? spotifyAlbumId.replace("mbid:", "")
-        : null;
-
-      // Try to find album info using multiple strategies
-      let albumToDownload: AlbumToDownload | undefined;
-
-      // Strategy 1: Match by resolved MusicBrainz MBID (highest priority for pre-resolved)
-      if (resolvedMbid) {
-        albumToDownload = preview.albumsToDownload.find(
-          (a) => a.albumMbid === resolvedMbid,
-        );
-      }
-
-      // Strategy 2: Match by Spotify album ID (for non-resolved tracks)
-      if (!albumToDownload && spotifyAlbumId && !wasMbResolved) {
-        albumToDownload = preview.albumsToDownload.find(
-          (a) => a.spotifyAlbumId === spotifyAlbumId,
-        );
-      }
-
-      // Strategy 3: Find album that contains this specific track in tracksNeeded
-      if (!albumToDownload) {
-        albumToDownload = preview.albumsToDownload.find((a) =>
-          a.tracksNeeded.some(
-            (t) =>
-              t.spotifyId === spotifyTrackId ||
-              (t.title.toLowerCase() === trackTitle.toLowerCase() &&
-                t.artist.toLowerCase() === spotifyArtist.toLowerCase()),
-          ),
-        );
-      }
-
-      // Strategy 4: Match by artist + album name similarity (for edge cases)
-      if (
-        !albumToDownload &&
-        spotifyArtist &&
-        spotifyAlbum &&
-        spotifyAlbum !== "Unknown Album"
-      ) {
-        const normalizedArtist = spotifyArtist.toLowerCase();
-        const normalizedAlbum = spotifyAlbum.toLowerCase();
-        albumToDownload = preview.albumsToDownload.find(
-          (a) =>
-            a.artistName.toLowerCase() === normalizedArtist &&
-            a.albumName
-              .toLowerCase()
-              .includes(normalizedAlbum.substring(0, 10)),
-        );
-      }
-
-      // Use resolved album name for display (from track or from albumToDownload)
-      const albumForDisplay =
-        spotifyAlbum && spotifyAlbum !== "Unknown Album"
-          ? spotifyAlbum
-          : albumToDownload?.albumName || spotifyAlbum;
-
-      // Get the actual MBID (either from pre-resolved or from albumToDownload)
-      const actualAlbumMbid =
-        resolvedMbid || albumToDownload?.albumMbid || null;
-
-      return {
-        artist: spotifyArtist,
-        title: trackTitle,
-        album: albumForDisplay,
-        albumMbid: actualAlbumMbid,
-        artistMbid: albumToDownload?.artistMbid || null,
-        preMatchedTrackId: m.localTrack?.id || null,
-      };
-    });
+    const pendingTracks = this.buildPendingTracks(preview);
 
     const job: ImportJob = {
       id: jobId,
@@ -1408,6 +1432,7 @@ class SpotifyImportService {
       tracksDownloadable: tracksFromDownloads,
       createdPlaylistId: null,
       error: null,
+      sourceUrl: null,
       createdAt: new Date(),
       updatedAt: new Date(),
       pendingTracks,
@@ -1738,8 +1763,8 @@ class SpotifyImportService {
       return;
     }
 
-    // Guard: don't re-process if already past the download phase
-    if (["completed", "failed", "cancelled", "scanning", "creating_playlist"].includes(job.status)) {
+    // Guard: don't re-process if already past the download phase or still fetching (quick import)
+    if (["completed", "failed", "cancelled", "scanning", "creating_playlist", "fetching"].includes(job.status)) {
       logger?.debug(`   Job already in ${job.status} state, skipping`);
       return;
     }
@@ -2568,6 +2593,7 @@ class SpotifyImportService {
         tracksDownloadable: dbJob.tracksDownloadable,
         createdPlaylistId: dbJob.createdPlaylistId,
         error: dbJob.error,
+        sourceUrl: dbJob.sourceUrl,
         createdAt: dbJob.createdAt,
         updatedAt: dbJob.updatedAt,
         pendingTracks: (dbJob.pendingTracks as any) || [],
@@ -2576,8 +2602,43 @@ class SpotifyImportService {
   }
 
   /**
-   * Cancel an import job without creating a playlist.
-   * All pending downloads are marked as failed and the job is marked as cancelled.
+   * Remove all DB and Redis artifacts for an import job.
+   * Does NOT touch downloaded files on disk (those become part of the library).
+   */
+  private async cleanupImportArtifacts(jobId: string, userId: string): Promise<void> {
+    // Delete all download jobs associated with this import
+    await prisma.downloadJob.deleteMany({
+      where: {
+        metadata: {
+          path: ["spotifyImportJobId"],
+          equals: jobId,
+        },
+      },
+    });
+
+    // Delete the import job from Postgres
+    try {
+      await prisma.spotifyImportJob.delete({ where: { id: jobId } });
+    } catch (err: any) {
+      // May already be deleted or not yet persisted
+      if (err.code !== "P2025") throw err;
+    }
+
+    // Delete from Redis
+    try {
+      await redisClient.del(IMPORT_JOB_KEY(jobId));
+      await redisClient.del(`import:preview:${jobId}`);
+    } catch {
+      // Non-critical
+    }
+
+    // Clean up job logger
+    jobLoggers.delete(jobId);
+  }
+
+  /**
+   * Cancel an import job.
+   * Aborts all in-flight work and removes all DB/Redis traces of the import.
    */
   async cancelJob(jobId: string): Promise<{
     playlistCreated: boolean;
@@ -2589,16 +2650,12 @@ class SpotifyImportService {
       throw new Error("Import job not found");
     }
 
-    const logger = jobLoggers.get(jobId);
-    logger?.debug(`[Spotify Import] Cancelling job ${jobId}...`);
-    logger?.info(`Job cancelled by user`);
+    const jobLogger = jobLoggers.get(jobId);
+    jobLogger?.debug(`[Spotify Import] Cancelling job ${jobId}...`);
+    jobLogger?.info(`Job cancelled by user`);
 
-    // If already completed, cancelled, or failed, nothing to do
-    if (
-      job.status === "completed" ||
-      job.status === "failed" ||
-      job.status === "cancelled"
-    ) {
+    // If already completed, nothing to undo
+    if (job.status === "completed") {
       return {
         playlistCreated: !!job.createdPlaylistId,
         playlistId: job.createdPlaylistId || null,
@@ -2606,77 +2663,42 @@ class SpotifyImportService {
       };
     }
 
+    // If already cancelled or failed, just ensure cleanup
+    if (job.status === "cancelled" || job.status === "failed") {
+      await this.cleanupImportArtifacts(jobId, job.userId);
+      return { playlistCreated: false, playlistId: null, tracksMatched: 0 };
+    }
+
     // Abort in-flight searches and downloads
     const controller = this.activeImportControllers.get(jobId);
     if (controller) controller.abort();
 
-    // Mark any pending download jobs as cancelled
-    await prisma.downloadJob.updateMany({
-      where: {
-        metadata: {
-          path: ["spotifyImportJobId"],
-          equals: jobId,
-        },
-        status: { in: ["pending", "processing"] },
-      },
-      data: {
-        status: "failed",
-        error: "Import cancelled by user",
-        completedAt: new Date(),
+    // Emit cancelled SSE event before cleanup so frontend gets notified
+    eventBus.emit({
+      type: "import:progress",
+      userId: job.userId,
+      payload: {
+        jobId: job.id,
+        playlistName: job.playlistName,
+        status: "cancelled",
+        progress: 0,
+        albumsTotal: job.albumsTotal,
+        albumsCompleted: job.albumsCompleted,
+        tracksMatched: 0,
+        tracksTotal: job.tracksTotal,
+        error: null,
       },
     });
 
-    // Collect tracks already matched to the library before cancellation
-    const matchedTrackIds = [
-      ...new Set(
-        (job.pendingTracks || [])
-          .map((t) => t.preMatchedTrackId)
-          .filter((id): id is string => !!id),
-      ),
-    ];
+    // Full cleanup -- remove all traces from DB and Redis
+    await this.cleanupImportArtifacts(jobId, job.userId);
 
-    let createdPlaylistId: string | null = null;
-
-    if (matchedTrackIds.length > 0) {
-      try {
-        const playlist = await prisma.playlist.create({
-          data: {
-            userId: job.userId,
-            name: job.playlistName,
-            isPublic: false,
-            spotifyPlaylistId: job.spotifyPlaylistId,
-            items: {
-              create: matchedTrackIds.map((trackId, index) => ({
-                trackId,
-                sort: index,
-              })),
-            },
-          },
-        });
-        createdPlaylistId = playlist.id;
-        logger?.info(
-          `Partial playlist created with ${matchedTrackIds.length} tracks: ${playlist.id}`,
-        );
-      } catch (err: any) {
-        logger?.warn(
-          `Failed to create partial playlist on cancel: ${err?.message}`,
-        );
-      }
-    }
-
-    job.status = "cancelled";
-    job.createdPlaylistId = createdPlaylistId;
-    job.tracksMatched = matchedTrackIds.length;
-    job.updatedAt = new Date();
-    await saveImportJob(job);
-    logger?.info(
-      `Import cancelled by user — ${createdPlaylistId ? "partial playlist created" : "no tracks matched"}`,
-    );
+    jobLogger?.info(`Import cancelled by user — all artifacts removed`);
 
     return {
-      playlistCreated: !!createdPlaylistId,
-      playlistId: createdPlaylistId,
-      tracksMatched: matchedTrackIds.length,
+      playlistCreated: false,
+      playlistId: null,
+      tracksMatched: 0,
     };
   }
 
@@ -3336,12 +3358,225 @@ class SpotifyImportService {
   }
 
   /**
-   * Mark an import job as failed (used by the BullMQ worker's failed handler)
+   * Quick import: skip preview, enqueue everything for background processing.
+   * Returns immediately with a jobId.
+   */
+  async quickImport(
+    url: string,
+    userId: string,
+    playlistName?: string,
+  ): Promise<{ jobId: string }> {
+    // Normalize URL for dedup (strip query params, trailing slashes, keep host)
+    let normalizedUrl: string;
+    try {
+      const parsed = new URL(url);
+      normalizedUrl = parsed.host + parsed.pathname.replace(/\/+$/, "");
+    } catch {
+      normalizedUrl = url;
+    }
+
+    // Check for existing active import of same URL
+    const existingJobs = await this.getUserJobs(userId);
+    const activeStatuses = ["pending", "fetching", "downloading", "scanning", "creating_playlist", "matching_tracks"];
+    const activeJob = existingJobs.find(
+      (j) => activeStatuses.includes(j.status) && j.sourceUrl === normalizedUrl,
+    );
+    if (activeJob) {
+      return { jobId: activeJob.id };
+    }
+
+    const jobId = `import_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+
+    // Fetch the real playlist name if not provided (lightweight API call)
+    let resolvedName = playlistName;
+    if (!resolvedName) {
+      try {
+        if (url.includes("deezer.com")) {
+          const deezerMatch = url.match(/playlist[\/:](\d+)/);
+          if (deezerMatch) {
+            resolvedName = await deezerService.getPlaylistName(deezerMatch[1]) ?? undefined;
+          }
+        } else if (url.includes("spotify.com")) {
+          resolvedName = await spotifyService.getPlaylistName(url) ?? undefined;
+        }
+      } catch {
+        // Non-critical -- fall back to hint
+      }
+    }
+
+    // Create a minimal ImportJob record so status polling works immediately
+    const job: ImportJob = {
+      id: jobId,
+      userId,
+      spotifyPlaylistId: "",
+      playlistName: resolvedName || extractPlaylistHint(url),
+      status: "pending",
+      progress: 0,
+      albumsTotal: 0,
+      albumsCompleted: 0,
+      tracksMatched: 0,
+      tracksTotal: 0,
+      tracksDownloadable: 0,
+      createdPlaylistId: null,
+      error: null,
+      sourceUrl: normalizedUrl,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      pendingTracks: [],
+    };
+
+    await saveImportJob(job);
+
+    const { importQueue } = await import("../workers/queues");
+    await importQueue.add("import", {
+      importJobId: jobId,
+      userId,
+      quickImport: true,
+      url,
+      playlistName,
+    }, {
+      jobId,
+    });
+
+    logger?.info(`[Quick Import] Enqueued job ${jobId} for ${url}`);
+    return { jobId };
+  }
+
+  /**
+   * Process a quick import from the BullMQ worker.
+   * Fetches playlist, matches library, auto-selects all downloadable albums,
+   * then delegates to processImport().
+   */
+  async processQuickImportFromQueue(
+    importJobId: string,
+    url: string,
+    playlistNameOverride?: string,
+  ): Promise<void> {
+    const job = await this.getJob(importJobId);
+    if (!job) throw new Error(`Import job ${importJobId} not found`);
+
+    const jobLogger = createPlaylistLogger(importJobId);
+    jobLoggers.set(importJobId, jobLogger);
+
+    try {
+      // Phase 1: Fetch playlist
+      job.status = "fetching";
+      await saveImportJob(job);
+
+      jobLogger?.info(`[Quick Import] Fetching playlist from ${url}`);
+
+      let preview: ImportPreview;
+      if (url.includes("deezer.com")) {
+        const deezerMatch = url.match(/playlist[\/:](\d+)/);
+        if (!deezerMatch) throw new Error("Invalid Deezer playlist URL");
+        const deezerPlaylist = await withRetry(() => deezerService.getPlaylist(deezerMatch[1]));
+        if (!deezerPlaylist) throw new Error("Deezer playlist not found");
+        preview = await this.generatePreviewFromDeezer(deezerPlaylist);
+      } else {
+        preview = await this.generatePreview(url);
+      }
+
+      // Re-read from DB to detect cancellation during the fetch phase
+      const freshJob = await this.getJob(importJobId);
+      if (!freshJob || freshJob.status === "cancelled") {
+        jobLogger?.info("[Quick Import] Job cancelled during fetch phase");
+        return;
+      }
+
+      // Phase 2: Update job with real data
+      const resolvedName = playlistNameOverride || preview.playlist.name;
+      job.playlistName = resolvedName;
+      job.spotifyPlaylistId = preview.playlist.id;
+      job.tracksTotal = preview.summary.total;
+      job.tracksMatched = preview.summary.inLibrary;
+      job.status = "downloading";
+      await saveImportJob(job);
+
+      jobLogger?.info(`[Quick Import] Playlist: "${resolvedName}" (${preview.summary.total} tracks)`);
+      jobLogger?.info(`[Quick Import] Already in library: ${preview.summary.inLibrary}, downloadable: ${preview.summary.downloadable}`);
+
+      // Phase 3: Auto-select ALL downloadable albums
+      const albumMbidsToDownload = preview.albumsToDownload.map(
+        (a) => a.albumMbid || a.spotifyAlbumId,
+      );
+
+      if (albumMbidsToDownload.length === 0) {
+        jobLogger?.info(`[Quick Import] No albums to download, creating playlist from matched tracks`);
+      }
+
+      // Calculate tracks from downloads
+      const tracksFromDownloads = preview.albumsToDownload.reduce(
+        (sum, a) => sum + a.tracksNeeded.length, 0,
+      );
+
+      const pendingTracks = this.buildPendingTracks(preview);
+
+      // Update job fully before handing off to processImport
+      job.albumsTotal = albumMbidsToDownload.length;
+      job.tracksDownloadable = tracksFromDownloads;
+      job.pendingTracks = pendingTracks;
+      await saveImportJob(job);
+
+      // Cache preview for processImport
+      try {
+        await redisClient.setEx(
+          `import:preview:${job.id}`,
+          IMPORT_JOB_TTL,
+          JSON.stringify(preview),
+        );
+      } catch (e: any) {
+        logger?.warn(`[Quick Import] Failed to cache preview: ${e.message}`);
+      }
+
+      // Phase 4: Hand off to existing import flow
+      await this.processImport(job, albumMbidsToDownload, preview);
+    } finally {
+      jobLoggers.delete(importJobId);
+    }
+  }
+
+  /**
+   * Mark an import job as failed (used by the BullMQ worker's failed handler).
+   * If zero tracks were matched, cleans up all artifacts.
+   * If some tracks matched, keeps the job record for visibility.
    */
   async markJobFailed(importJobId: string, errorMessage: string): Promise<void> {
     const job = await this.getJob(importJobId);
     if (!job) return;
 
+    // Check if any tracks were pre-matched before the failure
+    const hasMatchedTracks = (job.pendingTracks || []).some(
+      (t) => t.preMatchedTrackId,
+    );
+
+    if (!hasMatchedTracks) {
+      // Total failure -- clean up all traces
+      logger?.info(
+        `[Spotify Import] Job ${importJobId} failed with zero matched tracks, cleaning up`,
+      );
+
+      // Emit failure SSE before cleanup
+      eventBus.emit({
+        type: "import:progress",
+        userId: job.userId,
+        payload: {
+          jobId: job.id,
+          playlistName: job.playlistName,
+          status: "failed",
+          progress: 0,
+          albumsTotal: job.albumsTotal,
+          albumsCompleted: job.albumsCompleted,
+          tracksMatched: 0,
+          tracksTotal: job.tracksTotal,
+          error: errorMessage,
+        },
+      });
+
+      await this.cleanupImportArtifacts(importJobId, job.userId);
+      return;
+    }
+
+    // Partial failure -- keep job for visibility, user can see what happened
     job.status = "failed";
     job.error = errorMessage;
     job.updatedAt = new Date();
