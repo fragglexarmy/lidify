@@ -141,10 +141,18 @@ router.post("/import/quick", async (req, res) => {
         }
         const { url, playlistName } = quickImportSchema.parse(req.body);
 
-        const isValidUrl = url.includes("spotify.com/playlist/") || url.includes("deezer.com/playlist/") || url.includes("deezer.com/playlist:");
+        const isValidUrl = url.includes("spotify.com/playlist/")
+            || url.includes("deezer.com/playlist/")
+            || url.includes("deezer.com/playlist:")
+            || url.includes("youtube.com/playlist")
+            || url.includes("music.youtube.com/playlist")
+            || url.includes("youtube.com/watch")
+            || url.includes("youtu.be/")
+            || url.includes("music.apple.com/")
+            || url.includes("tidal.com/");
         if (!isValidUrl) {
             return res.status(400).json({
-                error: "Invalid playlist URL. Provide a Spotify or Deezer playlist URL.",
+                error: "Invalid playlist URL. Provide a Spotify, Deezer, YouTube, Apple Music, or Tidal URL.",
             });
         }
 

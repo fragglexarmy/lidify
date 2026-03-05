@@ -600,6 +600,22 @@ export default function BrowsePlaylistsPage() {
                                         Deezer
                                     </span>
                                 </div>
+                                <div className="flex items-center gap-2 px-2.5 py-1 bg-[#FF0000]/10 rounded border border-[#FF0000]/20">
+                                    <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 text-[#FF0000]" fill="currentColor">
+                                        <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
+                                    </svg>
+                                    <span className="text-[10px] font-black text-[#FF0000] uppercase tracking-wider">
+                                        YouTube
+                                    </span>
+                                </div>
+                                <div className="flex items-center gap-2 px-2.5 py-1 bg-[#fc3c44]/10 rounded border border-[#fc3c44]/20">
+                                    <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 text-[#fc3c44]" fill="currentColor">
+                                        <path d="M23.994 6.124a9.23 9.23 0 0 0-.24-2.19c-.317-1.31-1.062-2.31-2.18-3.043A5.022 5.022 0 0 0 19.63.28a10.58 10.58 0 0 0-1.312-.172C17.127.036 15.937 0 14.752 0c-1.188 0-2.377.003-3.566.012-.876.007-1.753.028-2.627.102-.544.046-1.08.13-1.603.3a4.88 4.88 0 0 0-2.397 1.674 5.063 5.063 0 0 0-.86 1.884 9.35 9.35 0 0 0-.247 2.182C3.394 7.344 3.39 8.534 3.39 9.722c0 1.188.004 2.377.012 3.566.007.876.028 1.753.102 2.627.046.544.13 1.08.3 1.603a4.88 4.88 0 0 0 1.674 2.397 5.06 5.06 0 0 0 1.884.86c.727.187 1.47.237 2.182.247 1.19.058 2.38.062 3.568.062 1.188 0 2.377-.004 3.566-.012.876-.007 1.753-.028 2.627-.102.544-.046 1.08-.13 1.603-.3a4.88 4.88 0 0 0 2.397-1.674 5.06 5.06 0 0 0 .86-1.884 9.35 9.35 0 0 0 .247-2.182c.058-1.19.062-2.38.062-3.568 0-1.188-.004-2.377-.012-3.566zm-8.15 7.15c-.937.48-1.876.955-2.816 1.425-.471.235-.944.468-1.42.692-.213.1-.434.18-.666.163-.346-.024-.592-.207-.727-.53a1.204 1.204 0 0 1-.088-.458c-.004-1.944-.002-3.888-.002-5.832 0-.104.007-.208.028-.31.06-.296.252-.496.534-.58.164-.05.332-.053.498.01.282.106.558.226.832.352l5.146 2.567c.16.08.318.165.463.275.29.22.378.544.225.872a.988.988 0 0 1-.45.441c-.18.094-.362.184-.544.273l-.012.006z" />
+                                    </svg>
+                                    <span className="text-[10px] font-black text-[#fc3c44] uppercase tracking-wider">
+                                        Apple
+                                    </span>
+                                </div>
                                 <span className="text-[10px] font-mono text-white/20 ml-auto uppercase tracking-wider">
                                     Supported
                                 </span>
@@ -615,7 +631,7 @@ export default function BrowsePlaylistsPage() {
                                     onChange={(e) =>
                                         setUrlInput(e.target.value)
                                     }
-                                    placeholder="Paste playlist URL here..."
+                                    placeholder="Paste Spotify, Deezer, YouTube, or Apple Music URL..."
                                     className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-[#a855f7]/40 transition-all font-mono"
                                     onKeyDown={(e) =>
                                         e.key === "Enter" && handleUrlSubmit()
@@ -633,7 +649,7 @@ export default function BrowsePlaylistsPage() {
                             </div>
                             <p className="text-[10px] font-mono text-white/20 mt-2 ml-1 uppercase tracking-wider">
                                 Example:
-                                https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M
+                                Example: https://open.spotify.com/playlist/... or YouTube/Apple Music URL
                             </p>
                         </div>
 
