@@ -1,5 +1,5 @@
 import { Router, Response } from "express";
-import { requireAuth, requireAuthOrToken } from "../middleware/auth";
+import { requireAuth, requireAuthOrToken, requireAdmin } from "../middleware/auth";
 import { imageLimiter, apiLimiter } from "../middleware/rateLimiter";
 import { lastFmService } from "../services/lastfm";
 import { prisma, Prisma } from "../utils/db";
@@ -4289,7 +4289,7 @@ router.get("/radio", async (req, res) => {
  * GET /library/corrupt-tracks
  * Returns all tracks flagged as corrupt
  */
-router.get("/corrupt-tracks", async (_req, res) => {
+router.get("/corrupt-tracks", requireAdmin, async (_req, res) => {
   try {
     const tracks = await prisma.track.findMany({
       where: { corrupt: true },
@@ -4304,7 +4304,6 @@ router.get("/corrupt-tracks", async (_req, res) => {
         title: t.title,
         artist: t.album.artist.name,
         album: t.album.title,
-        filePath: t.filePath,
       })),
     });
   } catch (error) {
@@ -4317,7 +4316,7 @@ router.get("/corrupt-tracks", async (_req, res) => {
  * DELETE /library/corrupt-tracks
  * Removes all corrupt tracks from the database
  */
-router.delete("/corrupt-tracks", async (_req, res) => {
+router.delete("/corrupt-tracks", requireAdmin, async (_req, res) => {
   try {
     const result = await prisma.track.deleteMany({ where: { corrupt: true } });
     res.json({ deleted: result.count, message: `Removed ${result.count} corrupt tracks` });

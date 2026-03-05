@@ -147,12 +147,10 @@ router.post("/import/quick", async (req, res) => {
             || url.includes("youtube.com/playlist")
             || url.includes("music.youtube.com/playlist")
             || url.includes("youtube.com/watch")
-            || url.includes("youtu.be/")
-            || url.includes("music.apple.com/")
-            || url.includes("tidal.com/");
+            || url.includes("youtu.be/");
         if (!isValidUrl) {
             return res.status(400).json({
-                error: "Invalid playlist URL. Provide a Spotify, Deezer, YouTube, Apple Music, or Tidal URL.",
+                error: "Invalid playlist URL. Provide a Spotify, Deezer, or YouTube playlist URL.",
             });
         }
 

@@ -29,27 +29,13 @@ class TrackIdentityService {
         let album: string | null = null;
         let coverUrl: string | null = null;
 
-        if (platform === "spotify") {
-            songLinkData = await songLinkService.resolve(url);
-            spotifyId = songLinkData?.spotifyId || null;
-            title = songLinkData?.title || null;
-            artist = songLinkData?.artist || null;
-            coverUrl = songLinkData?.thumbnailUrl || null;
-        } else if (platform === "deezer") {
-            songLinkData = await songLinkService.resolve(url);
-            spotifyId = songLinkData?.spotifyId || null;
-            title = songLinkData?.title || null;
-            artist = songLinkData?.artist || null;
-            coverUrl = songLinkData?.thumbnailUrl || null;
-        } else {
-            songLinkData = await songLinkService.resolve(url);
-            if (!songLinkData) return null;
+        songLinkData = await songLinkService.resolve(url);
+        if (!songLinkData) return null;
 
-            spotifyId = songLinkData.spotifyId;
-            title = songLinkData.title;
-            artist = songLinkData.artist;
-            coverUrl = songLinkData.thumbnailUrl;
-        }
+        spotifyId = songLinkData.spotifyId;
+        title = songLinkData.title;
+        artist = songLinkData.artist;
+        coverUrl = songLinkData.thumbnailUrl;
 
         if (!title || !artist) return null;
 
@@ -118,7 +104,8 @@ class TrackIdentityService {
         if (!track) return;
 
         const priority = ["id3", "spotify", "deezer", "musicbrainz", "songlink"];
-        const existingPriority = priority.indexOf(track.isrcSource || "");
+        const existingIdx = track.isrcSource ? priority.indexOf(track.isrcSource) : -1;
+        const existingPriority = existingIdx >= 0 ? existingIdx : priority.length;
         const newPriority = priority.indexOf(source);
 
         if (!track.isrc || (newPriority >= 0 && newPriority < existingPriority)) {
@@ -132,19 +119,21 @@ class TrackIdentityService {
     async populateTrackGenres(trackId: string, genreNames: string[]): Promise<void> {
         if (genreNames.length === 0) return;
 
-        for (const name of genreNames) {
-            const genre = await prisma.genre.upsert({
-                where: { name },
-                create: { name },
-                update: {},
-            });
+        await prisma.$transaction(async (tx) => {
+            for (const name of genreNames) {
+                const genre = await tx.genre.upsert({
+                    where: { name },
+                    create: { name },
+                    update: {},
+                });
 
-            await prisma.trackGenre.upsert({
-                where: { trackId_genreId: { trackId, genreId: genre.id } },
-                create: { trackId, genreId: genre.id },
-                update: {},
-            });
-        }
+                await tx.trackGenre.upsert({
+                    where: { trackId_genreId: { trackId, genreId: genre.id } },
+                    create: { trackId, genreId: genre.id },
+                    update: {},
+                });
+            }
+        });
     }
 
     async findTrackByIsrc(isrc: string): Promise<{
