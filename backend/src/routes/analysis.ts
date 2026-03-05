@@ -27,11 +27,16 @@ router.get("/status", requireAuth, async (req, res) => {
             _count: true,
         });
 
-        const total = statusCounts.reduce((sum, s) => sum + s._count, 0);
+        const rawTotal = statusCounts.reduce((sum, s) => sum + s._count, 0);
         const completed = statusCounts.find(s => s.analysisStatus === "completed")?._count || 0;
         const failed = statusCounts.find(s => s.analysisStatus === "failed")?._count || 0;
         const processing = statusCounts.find(s => s.analysisStatus === "processing")?._count || 0;
         const pending = statusCounts.find(s => s.analysisStatus === "pending")?._count || 0;
+        const permanentlyFailed = statusCounts.find(s => s.analysisStatus === "permanently_failed")?._count || 0;
+
+        // Exclude permanently_failed and corrupt tracks from progress denominator
+        const corruptCount = await prisma.track.count({ where: { corrupt: true, analysisStatus: { not: "permanently_failed" } } });
+        const total = rawTotal - permanentlyFailed - corruptCount;
 
         // Get queue length from Redis
         const queueLength = await redisClient.lLen(ANALYSIS_QUEUE);
@@ -48,6 +53,7 @@ router.get("/status", requireAuth, async (req, res) => {
             total,
             completed,
             failed,
+            permanentlyFailed,
             processing,
             pending,
             queueLength,
@@ -124,10 +130,10 @@ router.post("/start", requireAuth, requireAdmin, async (req, res) => {
  */
 router.post("/retry-failed", requireAuth, requireAdmin, async (req, res) => {
     try {
-        // Reset failed tracks to pending
+        // Reset failed and permanently_failed tracks to pending
         const result = await prisma.track.updateMany({
             where: {
-                analysisStatus: "failed",
+                analysisStatus: { in: ["failed", "permanently_failed"] },
             },
             data: {
                 analysisStatus: "pending",

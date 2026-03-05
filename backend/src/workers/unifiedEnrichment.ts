@@ -1063,18 +1063,33 @@ async function executeAudioPhase(): Promise<number> {
     }
 
     // Drain purgatory: tracks stuck as pending but retryCount >= MAX_RETRIES will never complete
-    const purgatoryDrained = await prisma.track.updateMany({
+    const purgatoryTracks = await prisma.track.findMany({
         where: {
             analysisStatus: "pending",
             analysisRetryCount: { gte: 3 },
         },
-        data: {
-            analysisStatus: "failed",
-            analysisError: "Exceeded retry limit — track may be corrupted or unsupported",
-        },
+        select: { id: true, title: true, filePath: true, analysisRetryCount: true },
     });
-    if (purgatoryDrained.count > 0) {
-        logger.warn(`[Enrichment] Drained ${purgatoryDrained.count} purgatory tracks to failed`);
+    if (purgatoryTracks.length > 0) {
+        await prisma.track.updateMany({
+            where: { id: { in: purgatoryTracks.map(t => t.id) } },
+            data: {
+                analysisStatus: "permanently_failed",
+                analysisError: "Exceeded retry limit — track may be corrupted or unsupported",
+            },
+        });
+        for (const track of purgatoryTracks) {
+            const failure = await enrichmentFailureService.recordFailure({
+                entityType: "audio",
+                entityId: track.id,
+                entityName: track.title,
+                errorMessage: "Exceeded retry limit — track may be corrupted or unsupported",
+                errorCode: "MAX_RETRIES_EXCEEDED",
+                metadata: { filePath: track.filePath, retryCount: track.analysisRetryCount },
+            });
+            await enrichmentFailureService.skipFailures([failure.id]);
+        }
+        logger.warn(`[Enrichment] Drained ${purgatoryTracks.length} purgatory tracks to permanently_failed`);
     }
 
     if (audioAnalysisCleanupService.isCircuitOpen()) {
@@ -1096,7 +1111,8 @@ async function executeVibePhase(): Promise<number> {
     }
 
     // Defer vibe phase until audio analysis is idle -- both ML models
-    // competing for CPU/GPU causes thrashing and UI flickering
+    // competing for CPU/GPU causes thrashing and UI flickering.
+    // permanently_failed tracks are terminal and should not block vibe phase
     const audioInFlight = await prisma.track.count({
         where: { analysisStatus: { in: ["processing", "pending"] } },
     });
@@ -1222,18 +1238,35 @@ export async function getEnrichmentProgress() {
     const artistPending =
         artistCounts.find((s) => s.enrichmentStatus === "pending")?._count || 0;
 
-    // Track tag progress
-    const trackTotal = await prisma.track.count();
+    // Exclude permanently_failed and corrupt tracks from enrichment totals --
+    // these will never complete and should not drag down progress percentages
+    const excludedCount = await prisma.track.count({
+        where: {
+            OR: [
+                { analysisStatus: "permanently_failed" },
+                { corrupt: true },
+            ],
+        },
+    });
+    const permanentlyFailedCount = await prisma.track.count({
+        where: { analysisStatus: "permanently_failed" },
+    });
+
+    // Track tag progress (exclude unreachable tracks)
+    const rawTrackTotal = await prisma.track.count();
+    const trackTotal = rawTrackTotal - excludedCount;
     const trackTagsEnriched = await prisma.track.count({
         where: {
             AND: [
                 { NOT: { lastfmTags: { equals: [] } } },
                 { NOT: { lastfmTags: { equals: null } } },
+                { analysisStatus: { not: "permanently_failed" } },
+                { corrupt: false },
             ],
         },
     });
 
-    // Audio analysis progress (background task)
+    // Audio analysis progress (background task, excludes permanently_failed/corrupt)
     const audioCompleted = await prisma.track.count({
         where: { analysisStatus: "completed" },
     });
@@ -1311,6 +1344,7 @@ export async function getEnrichmentProgress() {
             pending: audioPending,
             processing: audioProcessing,
             failed: audioFailed,
+            permanentlyFailed: permanentlyFailedCount,
             progress:
                 trackTotal > 0 ?
                     Math.round((audioCompleted / trackTotal) * 100)
@@ -1322,7 +1356,7 @@ export async function getEnrichmentProgress() {
         clapEmbeddings: {
             total: trackTotal,
             completed: clapCompleted,
-            pending: trackTotal - clapCompleted - clapFailed,
+            pending: Math.max(0, trackTotal - clapCompleted - clapFailed),
             processing: clapProcessing,
             failed: clapFailed,
             progress:
