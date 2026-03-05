@@ -18,7 +18,7 @@ import { prisma } from "../utils/db";
 import { redisClient } from "../utils/redis";
 import PQueue from "p-queue";
 import { acquisitionService } from "./acquisitionService";
-import { extractPrimaryArtist } from "../utils/artistNormalization";
+import { extractPrimaryArtist, normalizeArtistName } from "../utils/artistNormalization";
 import { trackIdentityService } from "./trackIdentity";
 import { songLinkService } from "./songlink";
 import { eventBus } from "./eventBus";
@@ -298,11 +298,14 @@ class SpotifyImportService {
   private async matchTrack(spotifyTrack: SpotifyTrack): Promise<MatchedTrack> {
     const normalizedTitle = normalizeString(spotifyTrack.title);
     const normalizedArtist = normalizeString(spotifyTrack.artist);
+    // For DB lookups against normalizedName field (preserves punctuation like R.E.M.)
+    const dbNormalizedArtist = normalizeArtistName(spotifyTrack.artist);
     const cleanedTrackTitle = normalizeTrackTitle(spotifyTrack.title);
 
     // Extract primary artist for better matching (handles "Artist feat. Someone")
     const primaryArtist = extractPrimaryArtist(spotifyTrack.artist);
-    const normalizedPrimaryArtist = normalizeString(primaryArtist);
+    // Use normalizeArtistName to match DB storage format (preserves punctuation like R.E.M.)
+    const normalizedPrimaryArtist = normalizeArtistName(primaryArtist);
 
     // Normalize album title (strip edition/remaster suffixes)
     const cleanedAlbum = normalizeAlbumForMatching(spotifyTrack.album);
@@ -366,7 +369,7 @@ class SpotifyImportService {
         where: {
           album: {
             artist: {
-              normalizedName: normalizedArtist,
+              normalizedName: dbNormalizedArtist,
             },
             title: {
               mode: "insensitive",
@@ -529,7 +532,7 @@ class SpotifyImportService {
         where: {
           album: {
             artist: {
-              normalizedName: normalizedArtist,
+              normalizedName: dbNormalizedArtist,
             },
           },
           OR: [
@@ -651,7 +654,7 @@ class SpotifyImportService {
 
     // 4c: Fallback - try with full artist name
     if (fuzzyMatches.length === 0 && primaryArtist !== spotifyTrack.artist) {
-      const fullArtistFirstWord = normalizedArtist.split(" ")[0];
+      const fullArtistFirstWord = dbNormalizedArtist.split(" ")[0];
       if (fullArtistFirstWord.length >= 3) {
         fuzzyMatches = await prisma.track.findMany({
           where: {
@@ -1990,7 +1993,7 @@ class SpotifyImportService {
     // --- Batch pre-load: all library tracks for relevant artists ---
     const allArtistFirstWords = [
       ...new Set(
-        job.pendingTracks.map((t) => normalizeString(t.artist).split(" ")[0]),
+        job.pendingTracks.map((t) => normalizeArtistName(t.artist).split(" ")[0]),
       ),
     ];
     type TrackWithRelations = Awaited<ReturnType<typeof prisma.track.findMany>>[number] & {
@@ -2088,7 +2091,7 @@ class SpotifyImportService {
         }
       }
 
-      const normalizedArtist = normalizeString(pendingTrack.artist);
+      const normalizedArtist = normalizeArtistName(pendingTrack.artist);
       const artistFirstWord = normalizedArtist.split(" ")[0];
       const strippedTitle = stripTrackSuffix(pendingTrack.title);
       const normalizedTitle = normalizeApostrophes(pendingTrack.title);
@@ -2173,7 +2176,7 @@ class SpotifyImportService {
         let bestScore = 0;
         for (const candidate of candidates) {
           const titleScore = stringSimilarity(cleanedTitle, normalizeTrackTitle(candidate.title));
-          const artistScore = stringSimilarity(normalizedArtist, normalizeString(candidate.album.artist.name));
+          const artistScore = stringSimilarity(normalizeString(pendingTrack.artist), normalizeString(candidate.album.artist.name));
           const combinedScore = titleScore * 0.7 + artistScore * 0.3;
           if (combinedScore > bestScore && combinedScore >= 65) {
             bestScore = combinedScore;
@@ -2239,8 +2242,7 @@ class SpotifyImportService {
           );
           logger?.logTrackMatch(tIdx, job.tracksTotal, pendingTrack.title, pendingTrack.artist, true, bestTitleMatch.id);
         } else {
-          const normalizedArtist = normalizeString(pendingTrack.artist);
-          const artistWord = normalizedArtist.split(" ")[0].toLowerCase();
+          const artistWord = normalizeArtistName(pendingTrack.artist).split(" ")[0].toLowerCase();
           if (artistExistsSet.has(artistWord)) {
             logger?.debug(`   ✗ No match: "${pendingTrack.title}" by ${pendingTrack.artist} (artist exists but track not found)`);
           } else {
@@ -2290,7 +2292,7 @@ class SpotifyImportService {
     // Recalculate unmatched - tracks that weren't added to playlist
     const matchedTitlesNormalized = new Set<string>();
     for (const pendingTrack of job.pendingTracks) {
-      const normalizedArtist = normalizeString(pendingTrack.artist);
+      const dbArtist = normalizeArtistName(pendingTrack.artist);
       const strippedTitle = stripTrackSuffix(pendingTrack.title);
 
       // Check if this track was matched by looking for it in the created items
@@ -2304,7 +2306,7 @@ class SpotifyImportService {
           album: {
             artist: {
               normalizedName: {
-                contains: normalizedArtist.split(" ")[0],
+                contains: dbArtist.split(" ")[0],
                 mode: "insensitive",
               },
             },
@@ -2314,7 +2316,7 @@ class SpotifyImportService {
 
       if (found) {
         matchedTitlesNormalized.add(
-          `${normalizedArtist}|${strippedTitle.toLowerCase()}`,
+          `${dbArtist}|${strippedTitle.toLowerCase()}`,
         );
       }
     }
@@ -2323,10 +2325,10 @@ class SpotifyImportService {
     const pendingTracksToSave = job.pendingTracks
       .map((track, index) => ({ ...track, originalIndex: index }))
       .filter((track) => {
-        const normalizedArtist = normalizeString(track.artist);
+        const dbArtist = normalizeArtistName(track.artist);
         const strippedTitle = stripTrackSuffix(track.title).toLowerCase();
         return !matchedTitlesNormalized.has(
-          `${normalizedArtist}|${strippedTitle}`,
+          `${dbArtist}|${strippedTitle}`,
         );
       });
 
@@ -2666,8 +2668,8 @@ class SpotifyImportService {
     // Match pending tracks in-memory
     const newPlaylistItems: { playlistId: string; trackId: string; sort: number }[] = [];
     for (const pendingTrack of job.pendingTracks) {
-      const normalizedArtist = normalizeString(pendingTrack.artist);
-      const candidates = candidatesByArtist.get(normalizedArtist.toLowerCase()) || [];
+      const dbArtist = normalizeArtistName(pendingTrack.artist);
+      const candidates = candidatesByArtist.get(dbArtist.toLowerCase()) || [];
 
       const localTrack = candidates.find(
         (c) => c.title.toLowerCase() === pendingTrack.title.toLowerCase(),
@@ -2910,8 +2912,8 @@ class SpotifyImportService {
       );
 
       for (const pendingTrack of pendingTracks) {
-        const normalizedArtist = normalizeString(pendingTrack.spotifyArtist);
-        const artistFirstWord = normalizedArtist.split(" ")[0];
+        const dbArtist = normalizeArtistName(pendingTrack.spotifyArtist);
+        const artistFirstWord = dbArtist.split(" ")[0];
         const strippedTitle = stripTrackSuffix(pendingTrack.spotifyTitle);
         const cleanedTitle = normalizeTrackTitle(strippedTitle);
 
@@ -3378,13 +3380,13 @@ class SpotifyImportService {
 
         // Also try with normalizedName
         if (!track) {
-          const normalizedArtist = normalizeString(entry.artist);
+          const dbArtist = normalizeArtistName(entry.artist);
           track = await prisma.track.findFirst({
             where: {
               title: { equals: entry.title, mode: "insensitive" },
               album: {
                 artist: {
-                  normalizedName: normalizedArtist,
+                  normalizedName: dbArtist,
                 },
               },
             },
@@ -3395,8 +3397,8 @@ class SpotifyImportService {
 
       // Tier 4: Fuzzy metadata match (fuzzball >= 80 threshold)
       if (!track && entry.artist && entry.title) {
-        const normalizedArtist = normalizeString(entry.artist);
-        const firstWord = normalizedArtist.split(" ")[0];
+        const dbArtist = normalizeArtistName(entry.artist);
+        const firstWord = dbArtist.split(" ")[0];
         if (firstWord.length >= 3) {
           const candidates = await prisma.track.findMany({
             where: {
@@ -3421,7 +3423,7 @@ class SpotifyImportService {
               normalizeString(candidate.title),
             );
             const artistScore = fuzz.token_set_ratio(
-              normalizedArtist,
+              normalizeString(entry.artist),
               normalizeString(candidate.album.artist.name),
             );
             const combined = titleScore * 0.6 + artistScore * 0.4;
