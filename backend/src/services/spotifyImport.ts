@@ -1,6 +1,5 @@
 import { randomUUID } from "crypto";
 import path from "path";
-import axios from "axios";
 import { withRetry } from "../utils/async";
 import pLimit from "p-limit";
 import * as fuzz from "fuzzball";
@@ -22,6 +21,7 @@ import { extractPrimaryArtist, normalizeArtistName } from "../utils/artistNormal
 import { trackIdentityService } from "./trackIdentity";
 import { songLinkService } from "./songlink";
 import { eventBus } from "./eventBus";
+import { extractPlaylist as ytdlpExtractPlaylist } from "./ytdlp";
 import { M3UEntry } from "./m3uParser";
 import {
   normalizeString,
@@ -141,6 +141,9 @@ function extractPlaylistHint(url: string): string {
     if (parsed.hostname.includes("youtube") || parsed.hostname.includes("youtu.be")) return "YouTube Import";
     if (parsed.hostname.includes("apple")) return "Apple Music Import";
     if (parsed.hostname.includes("tidal")) return "Tidal Import";
+    if (parsed.hostname.includes("soundcloud")) return "SoundCloud Import";
+    if (parsed.hostname.includes("bandcamp")) return "Bandcamp Import";
+    if (parsed.hostname.includes("mixcloud")) return "Mixcloud Import";
     return "Playlist Import";
   } catch {
     return "Playlist Import";
@@ -911,8 +914,7 @@ class SpotifyImportService {
     },
     source: string,
   ): Promise<ImportPreview> {
-    const logPrefix =
-      source === "Spotify" ? "[Spotify Import]" : "[Deezer Import]";
+    const logPrefix = `[${source} Import]`;
 
     // Check if Lidarr is configured -- MusicBrainz resolution is only needed for Lidarr
     const previewSettings = await getSystemSettings();
@@ -1233,101 +1235,148 @@ class SpotifyImportService {
     );
   }
 
-  private isExternalPlatformUrl(url: string): boolean {
+  isExternalPlatformUrl(url: string): boolean {
     const platform = songLinkService.detectPlatform(url);
     return !!platform && platform !== "spotify" && platform !== "deezer";
   }
 
-  private async generatePreviewFromExternalPlatform(url: string): Promise<ImportPreview> {
+  async generatePreviewFromExternalPlatform(url: string): Promise<ImportPreview> {
     const platform = songLinkService.detectPlatform(url) || "unknown";
-    const jobLogger = createPlaylistLogger(`external-${Date.now()}`);
 
-    let trackUrls: string[] = [];
-    if ((platform === "youtube" || platform === "youtubeMusic") && url.includes("list=")) {
-      trackUrls = await this.extractYouTubePlaylistUrls(url);
+    const isSingleTrack = !this.isPlaylistUrl(url);
+    if (isSingleTrack) {
+      const resolved = await trackIdentityService.resolveUrl(url);
+      if (!resolved) {
+        throw new Error(`Could not resolve track from ${platform} URL`);
+      }
+
+      const track: SpotifyTrack = {
+        spotifyId: resolved.spotifyId || `ext-${Date.now()}`,
+        title: resolved.title,
+        artist: resolved.artist,
+        artistId: "",
+        album: resolved.album || "Unknown Album",
+        albumId: "",
+        isrc: resolved.isrc,
+        durationMs: 0,
+        trackNumber: 1,
+        previewUrl: null,
+        coverUrl: resolved.coverUrl,
+      };
+
+      return this.buildPreviewFromTracklist(
+        [track],
+        {
+          id: `external-${Date.now()}`,
+          name: `${platform} import`,
+          description: null,
+          owner: "",
+          imageUrl: resolved.coverUrl || null,
+          trackCount: 1,
+        },
+        platform,
+      );
     }
 
-    if (trackUrls.length === 0) {
-      trackUrls = [url];
+    return this.extractPlaylistWithYtDlp(url);
+  }
+
+  private isPlaylistUrl(url: string): boolean {
+    try {
+      const parsed = new URL(url);
+      const hostname = parsed.hostname.toLowerCase();
+      if ((hostname.includes("youtube.com") || hostname.includes("youtu.be")) && parsed.searchParams.has("list")) return true;
+      if (hostname.includes("music.youtube.com") && parsed.pathname.includes("/playlist")) return true;
+      if (hostname.includes("soundcloud.com") && parsed.pathname.includes("/sets/")) return true;
+      if (hostname.includes("bandcamp.com") && parsed.pathname.includes("/album/")) return true;
+      if (hostname.includes("mixcloud.com") && parsed.pathname.includes("/playlist/")) return true;
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  private async extractPlaylistWithYtDlp(url: string): Promise<ImportPreview> {
+    const playlist = await ytdlpExtractPlaylist(url);
+
+    if (playlist.tracks.length === 0) {
+      throw new Error(`No tracks found in ${playlist.platform} playlist`);
     }
 
     const resolvedTracks: SpotifyTrack[] = [];
-    for (const trackUrl of trackUrls) {
-      try {
-        const resolved = await trackIdentityService.resolveUrl(trackUrl);
-        if (resolved) {
+    const tracksNeedingSongLink = playlist.tracks.filter((t) => !t.hasNativeMetadata);
+    const limit = pLimit(3);
+
+    logger?.info(
+      `[yt-dlp] ${playlist.tracks.length} tracks total, ${tracksNeedingSongLink.length} need song.link resolution`,
+    );
+
+    await Promise.all(
+      playlist.tracks.map((track, idx) =>
+        limit(async () => {
+          let coverUrl: string | null = track.thumbnailUrl;
+
+          if (!track.hasNativeMetadata) {
+            try {
+              const resolved = await Promise.race([
+                trackIdentityService.resolveUrl(track.url),
+                new Promise<null>((resolve) => setTimeout(() => resolve(null), 8_000)),
+              ]);
+              if (resolved?.title && resolved?.artist) {
+                resolvedTracks.push({
+                  spotifyId: resolved.spotifyId || `ext-${playlist.id}-${idx}`,
+                  title: resolved.title,
+                  artist: resolved.artist,
+                  artistId: "",
+                  album: resolved.album || track.album || "Unknown Album",
+                  albumId: "",
+                  isrc: resolved.isrc || null,
+                  durationMs: track.duration || 0,
+                  trackNumber: idx + 1,
+                  previewUrl: null,
+                  coverUrl: resolved.coverUrl || coverUrl,
+                });
+                return;
+              }
+            } catch {}
+          }
+
           resolvedTracks.push({
-            spotifyId: resolved.spotifyId || `ext-${Date.now()}-${resolvedTracks.length}`,
-            title: resolved.title,
-            artist: resolved.artist,
+            spotifyId: `ext-${playlist.id}-${idx}`,
+            title: track.title,
+            artist: track.artist,
             artistId: "",
-            album: resolved.album || "Unknown Album",
+            album: track.album || "Unknown Album",
             albumId: "",
-            isrc: resolved.isrc,
-            durationMs: 0,
-            trackNumber: resolvedTracks.length + 1,
+            isrc: null,
+            durationMs: track.duration || 0,
+            trackNumber: idx + 1,
             previewUrl: null,
-            coverUrl: resolved.coverUrl,
+            coverUrl: coverUrl,
           });
-        }
-      } catch (err) {
-        jobLogger?.debug(`Failed to resolve ${trackUrl}: ${err}`);
-      }
-    }
+        }),
+      ),
+    );
+
+    // Sort by original track order
+    resolvedTracks.sort((a, b) => a.trackNumber - b.trackNumber);
 
     if (resolvedTracks.length === 0) {
-      throw new Error(`Could not resolve any tracks from ${platform} URL`);
+      throw new Error(`Could not resolve any tracks from ${playlist.platform} playlist`);
     }
 
-    const playlistName = `${platform} import`;
     return this.buildPreviewFromTracklist(
       resolvedTracks,
       {
-        id: `external-${Date.now()}`,
-        name: playlistName,
+        id: playlist.id,
+        name: playlist.title,
         description: null,
-        owner: "",
+        owner: playlist.uploader || "",
         imageUrl: resolvedTracks[0]?.coverUrl || null,
         trackCount: resolvedTracks.length,
       },
-      platform,
+      playlist.platform,
     );
-  }
-
-  private async extractYouTubePlaylistUrls(playlistUrl: string): Promise<string[]> {
-    try {
-      const parsed = new URL(playlistUrl);
-      const listId = parsed.searchParams.get("list");
-      if (!listId) return [playlistUrl];
-
-      const instances = [
-        "https://vid.puffyan.us",
-        "https://invidious.fdn.fr",
-        "https://inv.nadeko.net",
-      ];
-
-      for (const instance of instances) {
-        try {
-          const response = await axios.get(
-            `${instance}/api/v1/playlists/${listId}`,
-            { timeout: 15000, headers: { "User-Agent": "Kima/1.6.3" } },
-          );
-
-          const videos = response.data.videos || [];
-          if (videos.length > 0) {
-            return videos.map((v: any) => `https://www.youtube.com/watch?v=${v.videoId}`);
-          }
-        } catch {
-          // Try next instance
-        }
-      }
-
-      logger?.warn(`All Invidious instances failed for playlist ${listId}`);
-      return [];
-    } catch (err) {
-      logger?.warn(`YouTube playlist extraction failed: ${err}`);
-      return [];
-    }
   }
 
   /**
@@ -3274,7 +3323,7 @@ class SpotifyImportService {
         logger?.error("[Preview Job] Failed:", error);
         const isNetworkError = ["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED"].includes(error.code);
         const userMessage = isNetworkError
-            ? "Deezer API is temporarily unavailable. Please try again in a moment."
+            ? "Service temporarily unavailable. Please try again in a moment."
             : (error.message || "Import failed");
         await redisClient.setEx(
           PREVIEW_JOB_KEY(jobId),
