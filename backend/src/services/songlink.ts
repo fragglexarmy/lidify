@@ -85,6 +85,8 @@ class SongLinkService {
             if (hostname.includes("music.apple.com")) return "appleMusic";
             if (hostname.includes("tidal.com")) return "tidal";
             if (hostname.includes("soundcloud.com")) return "soundcloud";
+            if (hostname.includes("bandcamp.com")) return "bandcamp";
+            if (hostname.includes("mixcloud.com")) return "mixcloud";
             return null;
         } catch {
             return null;

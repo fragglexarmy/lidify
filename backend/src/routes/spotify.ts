@@ -10,6 +10,7 @@ import { z } from "zod";
 import { spotifyService } from "../services/spotify";
 import { spotifyImportService } from "../services/spotifyImport";
 import { deezerService } from "../services/deezer";
+import { songLinkService } from "../services/songlink";
 import { readSessionLog, getSessionLogPath } from "../utils/playlistLogger";
 import { parseM3U } from "../services/m3uParser";
 
@@ -95,6 +96,14 @@ router.post("/preview/start", async (req, res) => {
             return res.status(401).json({ error: "Unauthorized" });
         }
         const { url } = parseUrlSchema.parse(req.body);
+
+        const supportedDomains = ["spotify.com", "deezer.com", "youtube.com", "youtu.be", "music.youtube.com", "soundcloud.com", "bandcamp.com", "mixcloud.com"];
+        if (!supportedDomains.some(domain => url.includes(domain))) {
+            return res.status(400).json({
+                error: "Invalid URL. Supported: Spotify, Deezer, YouTube, SoundCloud, Bandcamp, Mixcloud.",
+            });
+        }
+
         logger.debug(`[Playlist Import] Starting preview job for: ${url}`);
         const { jobId } = await spotifyImportService.startPreviewJob(url, req.user.id);
         res.json({ jobId });
@@ -147,10 +156,13 @@ router.post("/import/quick", async (req, res) => {
             || url.includes("youtube.com/playlist")
             || url.includes("music.youtube.com/playlist")
             || url.includes("youtube.com/watch")
-            || url.includes("youtu.be/");
+            || url.includes("youtu.be/")
+            || url.includes("soundcloud.com/")
+            || url.includes("bandcamp.com/")
+            || url.includes("mixcloud.com/");
         if (!isValidUrl) {
             return res.status(400).json({
-                error: "Invalid playlist URL. Provide a Spotify, Deezer, or YouTube playlist URL.",
+                error: "Invalid URL. Supported: Spotify, Deezer, YouTube, SoundCloud, Bandcamp, Mixcloud.",
             });
         }
 
@@ -212,6 +224,8 @@ router.post("/import", async (req, res) => {
                         .json({ error: "Deezer playlist not found" });
                 }
                 preview = await spotifyImportService.generatePreviewFromDeezer(deezerPlaylist);
+            } else if (spotifyImportService.isExternalPlatformUrl(effectiveUrl)) {
+                preview = await spotifyImportService.generatePreviewFromExternalPlatform(effectiveUrl);
             } else {
                 preview = await spotifyImportService.generatePreview(effectiveUrl);
             }

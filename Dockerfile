@@ -65,6 +65,7 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     'python-dotenv>=1.0.0' \
     'requests>=2.31.0' \
     'bullmq==2.19.5' \
+    'yt-dlp>=2024.12.0' \
     && pip cache purge \
     && find /usr -name "*.pyc" -delete \
     && find /usr -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true

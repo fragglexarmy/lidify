@@ -608,8 +608,13 @@ export default function BrowsePlaylistsPage() {
                                         YouTube
                                     </span>
                                 </div>
+                                <div className="flex items-center gap-2 px-2.5 py-1 bg-[#FF5500]/10 rounded border border-[#FF5500]/20">
+                                    <span className="text-[10px] font-black text-[#FF5500] uppercase tracking-wider">
+                                        SC
+                                    </span>
+                                </div>
                                 <span className="text-[10px] font-mono text-white/20 ml-auto uppercase tracking-wider">
-                                    Supported
+                                    +more
                                 </span>
                             </div>
                         </div>
@@ -623,7 +628,7 @@ export default function BrowsePlaylistsPage() {
                                     onChange={(e) =>
                                         setUrlInput(e.target.value)
                                     }
-                                    placeholder="Paste a Spotify, Deezer, or YouTube playlist URL..."
+                                    placeholder="Paste a playlist URL (Spotify, YouTube, SoundCloud...)"
                                     className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-[#a855f7]/40 transition-all font-mono"
                                     onKeyDown={(e) =>
                                         e.key === "Enter" && handleUrlSubmit()
@@ -640,7 +645,7 @@ export default function BrowsePlaylistsPage() {
                                 )}
                             </div>
                             <p className="text-[10px] font-mono text-white/20 mt-2 ml-1 uppercase tracking-wider">
-                                Example: https://open.spotify.com/playlist/... or YouTube/Apple Music URL
+                                Spotify, Deezer, YouTube, SoundCloud, Bandcamp, Mixcloud
                             </p>
                         </div>
 

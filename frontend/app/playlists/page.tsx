@@ -350,9 +350,9 @@ function ImportUrlPanel({ onClose }: { onClose: () => void }) {
             return;
         }
 
-        const supportedDomains = ["spotify.com", "deezer.com", "youtube.com", "youtu.be", "music.youtube.com"];
+        const supportedDomains = ["spotify.com", "deezer.com", "youtube.com", "youtu.be", "music.youtube.com", "soundcloud.com", "bandcamp.com", "mixcloud.com"];
         if (!supportedDomains.some(domain => trimmed.includes(domain))) {
-            setError("Supported: Spotify, Deezer, and YouTube playlist URLs");
+            setError("Supported: Spotify, Deezer, YouTube, SoundCloud, Bandcamp, Mixcloud");
             return;
         }
 
@@ -378,7 +378,7 @@ function ImportUrlPanel({ onClose }: { onClose: () => void }) {
                 type="text"
                 value={url}
                 onChange={(e) => { setUrl(e.target.value); setError(null); }}
-                placeholder="Paste a Spotify, Deezer, or YouTube playlist URL..."
+                placeholder="Paste a playlist URL (Spotify, YouTube, SoundCloud...)"
                 className="flex-1 min-w-[220px] px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-[#fca208]/50 focus:ring-1 focus:ring-[#fca208]/30"
                 disabled={isSubmitting}
             />
