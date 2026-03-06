@@ -41,6 +41,7 @@ import vibeRoutes from "./routes/vibe";
 import systemRoutes from "./routes/system";
 import shareRoutes from "./routes/share";
 import eventsRoutes from "./routes/events";
+import eventsTicketRoutes from "./routes/eventsTicket";
 import { subsonicRouter } from "./routes/subsonic/index";
 import { dataCacheService } from "./services/dataCache";
 import { enrichmentStateService } from "./services/enrichmentState";
@@ -173,6 +174,8 @@ app.use("/api/analysis", apiLimiter, analysisRoutes);
 app.use("/api/releases", apiLimiter, releasesRoutes);
 app.use("/api/vibe", apiLimiter, vibeRoutes);
 app.use("/api/system", apiLimiter, systemRoutes);
+// SSE ticket endpoint (must be registered before /api/events)
+app.use("/api/events/ticket", apiLimiter, eventsTicketRoutes);
 // SSE - no rate limit, long-lived connections
 app.use("/api/events", eventsRoutes);
 

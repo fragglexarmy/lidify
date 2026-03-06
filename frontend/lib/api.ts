@@ -907,6 +907,15 @@ class ApiClient {
         }>("/discover/current");
     }
 
+    async getSSETicket(): Promise<string | null> {
+        try {
+            const res = await this.post<{ ticket: string }>("/events/ticket", {});
+            return res.ticket;
+        } catch {
+            return null;
+        }
+    }
+
     async getDiscoverBatchStatus() {
         return this.request<{
             active: boolean;
