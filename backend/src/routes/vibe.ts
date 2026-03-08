@@ -96,6 +96,115 @@ router.post("/path", requireAuth, async (req, res) => {
 });
 
 /**
+ * POST /api/vibe/alchemy
+ * Vector arithmetic playlist generation.
+ * Computes: mean(add_embeddings) - mean(subtract_embeddings), finds nearest tracks.
+ */
+router.post("/alchemy", requireAuth, async (req, res) => {
+    try {
+        const { add, subtract, limit: requestedLimit } = req.body;
+
+        if (!add || !Array.isArray(add) || add.length === 0) {
+            return res.status(400).json({ error: "At least one track ID in 'add' is required" });
+        }
+
+        const limit = Math.min(Math.max(1, requestedLimit || 20), 100);
+        const allInputIds = [...add, ...(subtract || [])];
+
+        // Fetch embeddings for all input tracks
+        const embeddings = await prisma.$queryRaw<Array<{
+            track_id: string;
+            embedding: string;
+        }>>`
+            SELECT track_id, embedding::text as embedding
+            FROM track_embeddings
+            WHERE track_id = ANY(${allInputIds})
+        `;
+
+        const embMap = new Map<string, number[]>();
+        for (const row of embeddings) {
+            embMap.set(row.track_id, row.embedding.replace(/[\[\]]/g, "").split(",").map(Number));
+        }
+
+        // Verify all requested tracks have embeddings
+        const missingAdd = add.filter((id: string) => !embMap.has(id));
+        const missingSubtract = (subtract || []).filter((id: string) => !embMap.has(id));
+        if (missingAdd.length > 0 || missingSubtract.length > 0) {
+            return res.status(400).json({
+                error: "Some tracks are missing CLAP embeddings",
+                missingAdd,
+                missingSubtract,
+            });
+        }
+
+        // Compute: mean(add) - mean(subtract)
+        const dim = embMap.get(add[0])!.length;
+        const result = new Array(dim).fill(0);
+
+        for (const id of add) {
+            const emb = embMap.get(id)!;
+            for (let i = 0; i < dim; i++) result[i] += emb[i] / add.length;
+        }
+
+        if (subtract && subtract.length > 0) {
+            for (const id of subtract) {
+                const emb = embMap.get(id)!;
+                for (let i = 0; i < dim; i++) result[i] -= emb[i] / subtract.length;
+            }
+        }
+
+        // L2 normalize
+        let norm = 0;
+        for (let i = 0; i < dim; i++) norm += result[i] * result[i];
+        norm = Math.sqrt(norm);
+        if (norm > 0) {
+            for (let i = 0; i < dim; i++) result[i] /= norm;
+        }
+
+        // Query for nearest tracks, excluding inputs
+        const tracks = await prisma.$queryRaw<Array<{
+            id: string;
+            title: string;
+            duration: number;
+            distance: number;
+            albumId: string;
+            albumTitle: string;
+            albumCoverUrl: string | null;
+            artistId: string;
+            artistName: string;
+        }>>`
+            SELECT
+                t.id, t.title, t.duration,
+                te.embedding <=> ${result}::vector AS distance,
+                a.id as "albumId", a.title as "albumTitle", a."coverUrl" as "albumCoverUrl",
+                ar.id as "artistId", ar.name as "artistName"
+            FROM track_embeddings te
+            JOIN "Track" t ON te.track_id = t.id
+            JOIN "Album" a ON t."albumId" = a.id
+            JOIN "Artist" ar ON a."artistId" = ar.id
+            WHERE te.track_id != ALL(${allInputIds})
+            ORDER BY te.embedding <=> ${result}::vector
+            LIMIT ${limit}
+        `;
+
+        res.json({
+            tracks: tracks.map(t => ({
+                id: t.id,
+                title: t.title,
+                duration: t.duration,
+                distance: t.distance,
+                similarity: Math.max(0, 1 - t.distance / 2),
+                album: { id: t.albumId, title: t.albumTitle, coverUrl: t.albumCoverUrl },
+                artist: { id: t.artistId, name: t.artistName },
+            })),
+        });
+    } catch (error: any) {
+        logger.error("Alchemy error:", error);
+        res.status(500).json({ error: "Failed to compute alchemy blend" });
+    }
+});
+
+/**
  * GET /api/vibe/similar/:trackId
  * Find tracks similar to a given track using hybrid similarity (CLAP + audio features)
  */
