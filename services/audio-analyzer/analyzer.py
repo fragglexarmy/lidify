@@ -1648,13 +1648,12 @@ class AnalysisWorker:
                     failed += 1
                     logger.error(f"✗ Failed: {track_info[1]} - {e}")
         except TimeoutError:
-            # Mark every future that never completed so they don't rot as 'processing'
             for future, track_info in futures.items():
                 if not future.done():
                     future.cancel()
-                    self._save_failed(track_info[0], "Batch timeout: analysis exceeded 15 minutes")
+                    self._save_failed(track_info[0], "Batch timeout: analysis exceeded 15 minutes", is_timeout=True)
                     failed += 1
-                    logger.error(f"✗ Batch timeout: {track_info[1]}")
+                    logger.error(f"✗ Batch timeout (no penalty): {track_info[1]}")
             # Restart the pool to evict any stuck worker processes
             try:
                 self.executor.shutdown(wait=False)
@@ -1765,39 +1764,50 @@ class AnalysisWorker:
         finally:
             cursor.close()
     
-    def _save_failed(self, track_id: str, error: str):
-        """Mark track as failed and increment retry count.
+    def _save_failed(self, track_id: str, error: str, is_timeout: bool = False):
+        """Mark track as failed.
 
-        EnrichmentFailure records are created by the Node.js audioAnalysisCleanup
-        service only after max retries are exhausted, avoiding premature failure
-        visibility and competing writers.
+        If is_timeout=True, this was a batch timeout (innocent bystander) --
+        do NOT increment retryCount. Just reset to 'pending' so it gets
+        requeued without penalty.
         """
         cursor = self.db.get_cursor()
         try:
-            # Update track status
-            cursor.execute("""
-                UPDATE "Track"
-                SET
-                    "analysisStatus" = 'failed',
-                    "analysisError" = %s,
-                    "analysisRetryCount" = COALESCE("analysisRetryCount", 0) + 1
-                WHERE id = %s AND "analysisStatus" = 'processing'
-                RETURNING "analysisRetryCount"
-            """, (error[:500], track_id))
+            if is_timeout:
+                cursor.execute("""
+                    UPDATE "Track"
+                    SET
+                        "analysisStatus" = 'pending',
+                        "analysisError" = %s,
+                        "analysisStartedAt" = NULL
+                    WHERE id = %s AND "analysisStatus" = 'processing'
+                """, (error[:500], track_id))
+            else:
+                cursor.execute("""
+                    UPDATE "Track"
+                    SET
+                        "analysisStatus" = 'failed',
+                        "analysisError" = %s,
+                        "analysisRetryCount" = COALESCE("analysisRetryCount", 0) + 1
+                    WHERE id = %s AND "analysisStatus" = 'processing'
+                    RETURNING "analysisRetryCount"
+                """, (error[:500], track_id))
 
             if cursor.rowcount == 0:
                 logger.warning(f"Track {track_id} was reset by cleanup before failure marked, skipping")
                 self.db.rollback()
                 return
 
-            result = cursor.fetchone()
-            retry_count = result['analysisRetryCount'] if result else 0
-
-            if retry_count >= MAX_RETRIES:
-                logger.warning(f"Track {track_id} has permanently failed after {retry_count} attempts")
+            if not is_timeout:
+                result = cursor.fetchone()
+                retry_count = result['analysisRetryCount'] if result else 0
+                if retry_count >= MAX_RETRIES:
+                    logger.warning(f"Track {track_id} has permanently failed after {retry_count} attempts")
+                else:
+                    logger.info(f"Track {track_id} failed (attempt {retry_count}/{MAX_RETRIES}, will retry)")
             else:
-                logger.info(f"Track {track_id} failed (attempt {retry_count}/{MAX_RETRIES}, will retry)")
-            
+                logger.info(f"Track {track_id} reset to pending (batch timeout, no penalty)")
+
             self.db.commit()
         except Exception as e:
             logger.error(f"Failed to mark track as failed: {e}")
