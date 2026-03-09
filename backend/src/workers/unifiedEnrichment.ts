@@ -36,6 +36,7 @@ import {
 } from "./audioCompletionSubscriber";
 import { enrichmentStateService } from "../services/enrichmentState";
 import { enrichmentFailureService } from "../services/enrichmentFailureService";
+import fs from "fs";
 import { audioAnalysisCleanupService } from "../services/audioAnalysisCleanup";
 import { featureDetection } from "../services/featureDetection";
 import { musicBrainzService } from "../services/musicbrainz";
@@ -1155,6 +1156,30 @@ async function executeScanPhase(): Promise<number> {
 
     if (invalid > 0) {
         logger.info(`[Enrichment] Pre-scan: ${validated} valid, ${invalid} invalid`);
+    }
+
+    // Spot-check previously-valid tracks for file moves/deletes
+    const RECHECK_BATCH = 20;
+    const recheckTracks = await prisma.track.findMany({
+        where: { scanStatus: "valid", analysisStatus: "pending" },
+        select: { id: true, filePath: true },
+        take: RECHECK_BATCH,
+        orderBy: { updatedAt: "asc" },
+    });
+
+    for (const track of recheckTracks) {
+        const recheckPath = path.join(musicPath, track.filePath);
+        try {
+            await fs.promises.access(recheckPath, fs.constants.R_OK);
+        } catch {
+            await prisma.track.update({
+                where: { id: track.id },
+                data: {
+                    scanStatus: "invalid",
+                    scanError: "File no longer accessible",
+                },
+            });
+        }
     }
 
     return validated;

@@ -137,6 +137,7 @@ router.post("/retry-failed", requireAuth, requireAdmin, async (req, res) => {
                 analysisStatus: "pending",
                 analysisError: null,
                 analysisRetryCount: 0,
+                scanStatus: "pending",
             },
         });
 
@@ -146,6 +147,7 @@ router.post("/retry-failed", requireAuth, requireAdmin, async (req, res) => {
                 analysisStatus: "pending",
                 analysisError: null,
                 analysisRetryCount: 0,
+                scanStatus: "pending",
             },
         });
 
