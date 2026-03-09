@@ -107,6 +107,17 @@ Closes #143, #141.
 - **Sleep timer** -- Configurable auto-pause timer on all player modes (mini, full, overlay). Presets at 15/30/45/60/90/120 minutes plus custom input. Countdown displays next to timer icon when active
 - **Shared timer state** -- Timer persists across player mode switches via module-level shared state with `useSyncExternalStore`
 
+## Enrichment Pipeline Hardening
+
+- **Synchronous Redis gate** -- Node.js sets `audio:analysis:gate` key in Redis before sending pub/sub pause signals. Python checks this key atomically before any work path (`_run_db_reconciliation`, `process_batch_parallel`, `process_scan_queue`). Eliminates the pub/sub timing race where Python would pick up freshly-reset tracks before processing the pause message
+- **Reset wipes BullMQ queues** -- `resetAllEnrichmentData` now cleans completed/failed/waiting/active jobs from all four BullMQ queues (artist, track, vibe, podcast). Previously, stale completed job hashes caused jobId-based dedup to silently drop re-queued jobs after reset
+- **Reset no longer auto-starts enrichment** -- Reset sets `userStopped = true` and leaves enrichment state as idle. User must explicitly click start. Previously, `initializeState()` set status to "running" and the enrichment cycle would auto-resume
+- **MusicBrainz genre fallback** -- Artist enrichment now falls back to MusicBrainz curated genres (by MBID) when Last.fm tags return empty. Fixes missing genres for well-known artists with non-canonical name spellings (e.g. "Blink 182" vs "blink-182")
+- **ProcessPoolExecutor memory recycling** -- Added `max_tasks_per_child=50` to both ProcessPoolExecutor instances. Workers are recycled after 50 tasks, preventing Essentia/TensorFlow memory leaks from accumulating across long enrichment runs
+- **BrokenProcessPool recovery** -- Per-track and pool-level `BrokenProcessPool` handling treats OOM-killed worker tracks as innocent bystanders (`is_timeout=True`) instead of penalizing them with permanent failures. Pool is recreated automatically
+- **Reset enrichment button relocated** -- Moved directly beneath the enrichment progress container in settings for better discoverability
+- **Full clean slate reset** -- Reset now wipes artist metadata (summary, hero image, genres, similar artists) and mood tags alongside audio analysis data. Previously only wiped audio analysis, leaving stale artist data
+
 ## Audio Analysis Bug Fixes
 
 - **Retry count reset on crash recovery** -- Startup crash recovery and stop-cleanup now reset `analysisRetryCount` to 0 alongside `analysisStatus`, preventing tracks from hitting max retries after a restart

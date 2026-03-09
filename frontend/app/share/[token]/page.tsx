@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useParams } from "next/navigation";
+import Image from "next/image";
 import {
     Play,
     Pause,
@@ -301,12 +302,14 @@ export default function SharePage() {
                 <div className="w-full max-w-lg">
 
                     {/* Cover art */}
-                    <div className="w-full aspect-square max-w-[280px] mx-auto mb-8 rounded-xl overflow-hidden bg-white/[0.03] shadow-2xl shadow-black/60">
+                    <div className="relative w-full aspect-square max-w-[280px] mx-auto mb-8 rounded-xl overflow-hidden bg-white/[0.03] shadow-2xl shadow-black/60">
                         {coverArtUrl ? (
-                            <img
+                            <Image
                                 src={coverArtUrl}
                                 alt=""
-                                className="w-full h-full object-cover"
+                                fill
+                                unoptimized
+                                className="object-cover"
                             />
                         ) : (
                             <div className="w-full h-full flex items-center justify-center">
@@ -462,11 +465,13 @@ export default function SharePage() {
                                         </div>
 
                                         {trackCoverUrl && (
-                                            <div className="w-8 h-8 rounded bg-white/[0.03] flex-shrink-0 overflow-hidden">
-                                                <img
+                                            <div className="relative w-8 h-8 rounded bg-white/[0.03] flex-shrink-0 overflow-hidden">
+                                                <Image
                                                     src={trackCoverUrl}
                                                     alt=""
-                                                    className="w-full h-full object-cover"
+                                                    fill
+                                                    unoptimized
+                                                    className="object-cover"
                                                 />
                                             </div>
                                         )}

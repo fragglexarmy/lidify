@@ -1012,6 +1012,42 @@ def _pool_health_check():
     """No-op function for pool health checks (lambdas can't be pickled with spawn mode)."""
     return True
 
+
+def _validate_track_in_process(args: Tuple[str, str]) -> Tuple[str, dict]:
+    """Validate a track in a worker process -- decode test, no ML inference."""
+    track_id, file_path = args
+    full_path = os.path.join(MUSIC_PATH, file_path.replace('\\', '/'))
+
+    if not os.path.exists(full_path):
+        return (track_id, {'valid': False, 'error': 'File not found'})
+
+    if os.path.getsize(full_path) == 0:
+        return (track_id, {'valid': False, 'error': 'Empty file (0 bytes)'})
+
+    try:
+        loader = es.MonoLoader(filename=full_path, sampleRate=44100)
+        audio = loader()
+
+        if len(audio) == 0:
+            return (track_id, {'valid': False, 'error': 'Audio is empty after decoding'})
+
+        duration = len(audio) / 44100.0
+        if duration < 5.0:
+            return (track_id, {'valid': False, 'error': f'Audio too short: {duration:.1f}s (minimum 5s)'})
+
+        # Check a 10s sample for corruption indicators
+        sample = audio[:min(len(audio), 441000)]
+        if np.any(np.isnan(sample)) or np.any(np.isinf(sample)):
+            return (track_id, {'valid': False, 'error': 'Audio contains NaN or Inf values'})
+
+        rms = np.sqrt(np.mean(sample ** 2))
+        if rms < 1e-6:
+            return (track_id, {'valid': False, 'error': 'Audio is effectively silent'})
+
+        return (track_id, {'valid': True})
+    except Exception as e:
+        return (track_id, {'valid': False, 'error': f'Essentia load failed: {str(e)[:200]}'})
+
 def _init_worker_process():
     """
     Initialize the analyzer for a worker process.
@@ -1101,6 +1137,27 @@ class AnalysisWorker:
             logger.warning(f"Failed to subscribe to control channel: {e}")
             self.pubsub = None
     
+    def _is_gate_closed(self) -> bool:
+        """Check the synchronous Redis gate key set by Node.js.
+        Returns True if Python should NOT process work.
+        This is the authoritative stop signal -- no pub/sub timing dependency.
+        Also syncs local is_paused flag to match gate state."""
+        try:
+            val = self.redis.get("audio:analysis:gate")
+            if val and (val == b"paused" or val == "paused"):
+                if not self.is_paused:
+                    self.is_paused = True
+                    logger.info("Gate closed by Node.js -- pausing")
+                return True
+            else:
+                if self.is_paused:
+                    # Gate is open but we're still paused -- Node.js has resumed
+                    self.is_paused = False
+                    logger.info("Gate opened by Node.js -- resuming")
+                return False
+        except Exception:
+            return False
+
     def _check_control_signals(self):
         """Check for pause/resume/stop/set_workers control signals (non-blocking)"""
         if not self.pubsub:
@@ -1170,7 +1227,8 @@ class AnalysisWorker:
         # Create new pool first
         self.executor = ProcessPoolExecutor(
             max_workers=NUM_WORKERS,
-            initializer=_init_worker_process
+            initializer=_init_worker_process,
+            max_tasks_per_child=50,
         )
         
         # Gracefully shutdown old pool (wait for in-flight work)
@@ -1215,7 +1273,8 @@ class AnalysisWorker:
         logger.info(f"Starting worker pool with {NUM_WORKERS} processes...")
         self.executor = ProcessPoolExecutor(
             max_workers=NUM_WORKERS,
-            initializer=_init_worker_process
+            initializer=_init_worker_process,
+            max_tasks_per_child=50,
         )
         self.pool_active = True
         logger.info(f"Worker pool started ({NUM_WORKERS} workers)")
@@ -1393,6 +1452,9 @@ class AnalysisWorker:
 
         Returns True if pending work was found, False if nothing to do.
         """
+        if self.is_paused or self._is_gate_closed():
+            return False
+
         cursor = self.db.get_cursor()
         try:
             cursor.execute("""
@@ -1476,15 +1538,14 @@ class AnalysisWorker:
         last_cleanup = self.redis.get(CLEANUP_DEBOUNCE_KEY)
         cleanup_debounce_seconds = 120
 
+        skip_cleanup = False
         if last_cleanup:
             elapsed = time.time() - float(last_cleanup)
             if elapsed < cleanup_debounce_seconds:
                 logger.info(f"Skipping startup cleanup (ran {elapsed:.0f}s ago, debounce {cleanup_debounce_seconds}s)")
-            else:
-                logger.info("Cleaning up stale processing tracks...")
-                self._cleanup_stale_processing()
-                self.redis.set(CLEANUP_DEBOUNCE_KEY, str(time.time()), ex=cleanup_debounce_seconds)
-        else:
+                skip_cleanup = True
+
+        if not skip_cleanup:
             logger.info("Cleaning up stale processing tracks...")
             self._cleanup_stale_processing()
             self.redis.set(CLEANUP_DEBOUNCE_KEY, str(time.time()), ex=cleanup_debounce_seconds)
@@ -1507,6 +1568,8 @@ class AnalysisWorker:
                     # Check for control signals (pause/resume/stop/set_workers)
                     self._check_control_signals()
                     self._apply_pending_resize()
+                    # Sync pause state from Redis gate (authoritative, no pub/sub dependency)
+                    self._is_gate_closed()
 
                     if self.is_paused:
                         logger.debug("Audio analysis paused, waiting for resume signal...")
@@ -1591,6 +1654,9 @@ class AnalysisWorker:
         Returns:
             True if there was work to process, False if BRPOP timed out
         """
+        if self._is_gate_closed():
+            return False
+
         result = self.redis.brpop(ANALYSIS_QUEUE, timeout=BRPOP_TIMEOUT)
 
         if result is None:
@@ -1658,11 +1724,31 @@ class AnalysisWorker:
                         self._save_results(track_id, file_path, features)
                         completed += 1
                         logger.info(f"✓ Completed: {file_path}")
+                except BrokenProcessPool:
+                    # Worker died (OOM, segfault) -- not the track's fault
+                    track_info = futures[future]
+                    self._save_failed(track_info[0], "Worker process died (OOM/crash)", is_timeout=True)
+                    failed += 1
+                    logger.error(f"✗ Worker death (no penalty): {track_info[1]}")
                 except Exception as e:
                     track_info = futures[future]
-                    self._save_failed(track_info[0], f"Timeout or error: {e}")
+                    is_pool_death = "abruptly terminated" in str(e) or "broken" in str(e).lower()
+                    self._save_failed(track_info[0], f"Timeout or error: {e}", is_timeout=is_pool_death)
                     failed += 1
-                    logger.error(f"✗ Failed: {track_info[1]} - {e}")
+                    if is_pool_death:
+                        logger.error(f"✗ Worker death (no penalty): {track_info[1]} - {e}")
+                    else:
+                        logger.error(f"✗ Failed: {track_info[1]} - {e}")
+        except BrokenProcessPool:
+            # Pool broke during iteration -- all remaining futures are innocent
+            logger.error("BrokenProcessPool during batch -- resetting remaining tracks without penalty")
+            for future, track_info in futures.items():
+                if not future.done():
+                    future.cancel()
+                    self._save_failed(track_info[0], "Worker pool crashed (OOM/crash)", is_timeout=True)
+                    failed += 1
+                    logger.error(f"✗ Pool crash (no penalty): {track_info[1]}")
+            self._recreate_pool()
         except TimeoutError:
             for future, track_info in futures.items():
                 if not future.done():
@@ -1833,62 +1919,53 @@ class AnalysisWorker:
             cursor.close()
 
 
-    def _validate_track(self, track_id: str, file_path: str) -> dict:
-        """Quick Essentia load test -- no ML inference, just decode validation."""
-        music_path = os.getenv('MUSIC_PATH', '/music')
-        full_path = os.path.join(music_path, file_path)
-
-        if not os.path.exists(full_path):
-            return {'valid': False, 'error': 'File not found'}
-
-        if os.path.getsize(full_path) == 0:
-            return {'valid': False, 'error': 'Empty file (0 bytes)'}
-
-        try:
-            loader = es.MonoLoader(filename=full_path, sampleRate=44100)
-            audio = loader()
-
-            if len(audio) == 0:
-                return {'valid': False, 'error': 'Audio is empty after decoding'}
-
-            duration = len(audio) / 44100.0
-            if duration < 5.0:
-                return {'valid': False, 'error': f'Audio too short: {duration:.1f}s (minimum 5s)'}
-
-            if np.any(np.isnan(audio)) or np.any(np.isinf(audio)):
-                return {'valid': False, 'error': 'Audio contains NaN or Inf values'}
-
-            rms = np.sqrt(np.mean(audio ** 2))
-            if rms < 1e-6:
-                return {'valid': False, 'error': 'Audio is effectively silent'}
-
-            return {'valid': True}
-        except Exception as e:
-            return {'valid': False, 'error': f'Essentia load failed: {str(e)[:200]}'}
-
     def process_scan_queue(self):
-        """Process scan validation requests from Redis queue."""
-        SCAN_QUEUE = 'audio:scan:queue'
-        result = self.redis.brpop(SCAN_QUEUE, timeout=1)
-        if result is None:
+        """Process scan validation requests via the worker pool (non-blocking)."""
+        if self.is_paused or self._is_gate_closed():
             return False
 
-        _, job_data = result
-        jobs = []
-        jobs.append(json.loads(job_data))
+        SCAN_QUEUE = 'audio:scan:queue'
+        raw = self.redis.lpop(SCAN_QUEUE)
+        if raw is None:
+            return False
 
+        jobs = [json.loads(raw)]
         while len(jobs) < 50:
             more = self.redis.lpop(SCAN_QUEUE)
             if not more:
                 break
             jobs.append(json.loads(more))
 
+        self._ensure_pool()
+        futures = {}
+        for job in jobs:
+            tid = job['trackId']
+            fp = job.get('filePath', '')
+            futures[self.executor.submit(_validate_track_in_process, (tid, fp))] = tid
+
         cursor = self.db.get_cursor()
         try:
-            for job in jobs:
-                track_id = job['trackId']
-                file_path = job.get('filePath', '')
-                result = self._validate_track(track_id, file_path)
+            for future in as_completed(futures, timeout=300):
+                try:
+                    track_id, result = future.result(timeout=60)
+                except BrokenProcessPool:
+                    track_id = futures[future]
+                    cursor.execute("""
+                        UPDATE "Track"
+                        SET "scanStatus" = 'pending', "scanError" = NULL
+                        WHERE id = %s
+                    """, (track_id,))
+                    logger.error(f"Scan worker died for {track_id}, reset to pending")
+                    continue
+                except Exception as e:
+                    track_id = futures[future]
+                    cursor.execute("""
+                        UPDATE "Track"
+                        SET "scanStatus" = 'pending', "scanError" = NULL
+                        WHERE id = %s
+                    """, (track_id,))
+                    logger.error(f"Scan validation error for {track_id}: {e}")
+                    continue
 
                 if result['valid']:
                     cursor.execute("""
@@ -1905,6 +1982,19 @@ class AnalysisWorker:
 
             self.db.commit()
             logger.info(f"Scan validation: processed {len(jobs)} tracks")
+        except (BrokenProcessPool, TimeoutError):
+            # Pool crash or timeout -- reset all unfinished scan tracks to pending
+            for future, tid in futures.items():
+                if not future.done():
+                    future.cancel()
+                    cursor.execute("""
+                        UPDATE "Track"
+                        SET "scanStatus" = 'pending', "scanError" = NULL
+                        WHERE id = %s
+                    """, (tid,))
+            self.db.commit()
+            logger.error("Scan pool crash/timeout -- reset remaining tracks to pending")
+            self._recreate_pool()
         except Exception as e:
             logger.error(f"Scan validation failed: {e}")
             self.db.rollback()

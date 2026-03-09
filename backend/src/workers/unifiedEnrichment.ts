@@ -12,6 +12,7 @@
  */
 
 import { logger } from "../utils/logger";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../utils/db";
 import { lastFmService } from "../services/lastfm";
 import Redis from "ioredis";
@@ -83,6 +84,8 @@ async function clearPauseState(): Promise<void> {
     // Resume BullMQ enrichment workers + vibe queue
     Promise.all(activeEnrichmentWorkers.map((w) => w.resume())).catch(() => {});
     resumeVibeQueuing();
+    // Clear synchronous gate BEFORE pub/sub resume -- Python sees "open" immediately
+    await enrichmentStateService.clearGate();
     // Resume the Python audio analyzer in case it was paused by a prior stop
     try {
         const pub = new Redis(config.redisUrl);
@@ -281,10 +284,15 @@ export async function startUnifiedEnrichmentWorker() {
          where: { lastfmTags: { has: "_queued" } },
          data: { lastfmTags: [] },
      });
-     const totalOrphaned = orphanedAudio.count + orphanedVibe.count + orphanedArtists.count + orphanedQueued.count;
+     // Crash recovery: reset tracks stuck in "validating" (scan queue may be lost)
+     const orphanedScan = await prisma.track.updateMany({
+         where: { scanStatus: "validating" },
+         data: { scanStatus: "pending", scanError: null },
+     });
+     const totalOrphaned = orphanedAudio.count + orphanedVibe.count + orphanedArtists.count + orphanedQueued.count + orphanedScan.count;
      if (totalOrphaned > 0) {
          logger.info(
-             `[Enrichment] Crash recovery: reset ${orphanedAudio.count} audio, ${orphanedVibe.count} vibe, ${orphanedArtists.count} artists, ${orphanedQueued.count} _queued tracks`
+             `[Enrichment] Crash recovery: reset ${orphanedAudio.count} audio, ${orphanedVibe.count} vibe, ${orphanedArtists.count} artists, ${orphanedQueued.count} _queued, ${orphanedScan.count} scan tracks`
          );
      }
 
@@ -963,7 +971,7 @@ async function queueAudioAnalysis(): Promise<number> {
  * Returns true if cycle should halt (either stopping or paused).
  */
 async function shouldHaltCycle(): Promise<boolean> {
-    if (isStopping) {
+    if (isStopping || userStopped) {
         await enrichmentStateService.updateState({
             status: "idle",
             currentPhase: null,
@@ -1654,13 +1662,40 @@ export async function triggerEnrichmentNow(): Promise<{
 
 export async function resetAllEnrichmentData(): Promise<{
     tracksReset: number;
-    embeddingsDeleted: number;
+    artistsReset: number;
     failuresDeleted: number;
     moodBucketsDeleted: number;
 }> {
-    await enrichmentStateService.stop();
-
     const redisInstance = getRedis();
+
+    // === PHASE 1: Stop everything BEFORE touching the database ===
+
+    // Set Node.js flags immediately
+    isStopping = false;
+    isPaused = false;
+    userStopped = true;
+    userStoppedWarned = false;
+
+    // Set synchronous gate FIRST -- Python checks this key before any work path,
+    // so even if it hasn't processed the pub/sub pause yet, it won't pick up new work.
+    // This eliminates the pub/sub race that required the old 3-second sleep.
+    await redisInstance.set("audio:analysis:gate", "paused");
+
+    // Flush all queues so Python can't pick up new work
+    await redisInstance.del(
+        "audio:analysis:queue",
+        "audio:scan:queue",
+    );
+
+    // Send pause to Python analyzer AND stop Node.js enrichment state.
+    // Gate is already set above, so this is best-effort for pub/sub notification.
+    try {
+        await enrichmentStateService.stop();
+    } catch {
+        // May throw if no active enrichment state exists -- gate handles it
+    }
+
+    // === PHASE 2: Wipe all enrichment data ===
 
     const tracksReset = await prisma.track.updateMany({
         data: {
@@ -1703,9 +1738,20 @@ export async function resetAllEnrichmentData(): Promise<{
             moodTags: [],
             essentiaGenres: [],
             lastfmTags: [],
-            corrupt: false,
         },
     });
+
+    const artistsReset = await prisma.artist.updateMany({
+        data: {
+            enrichmentStatus: "pending",
+            lastEnriched: null,
+            summary: null,
+            heroUrl: null,
+            genres: Prisma.DbNull,
+            similarArtistsJson: Prisma.DbNull,
+        },
+    });
+    await prisma.similarArtist.deleteMany({});
 
     await prisma.$executeRaw`TRUNCATE TABLE track_embeddings`;
 
@@ -1713,9 +1759,9 @@ export async function resetAllEnrichmentData(): Promise<{
 
     const failuresDeleted = await prisma.enrichmentFailure.deleteMany({});
 
+    // === PHASE 3: Clean up remaining Redis state ===
+
     const keysToDelete = [
-        "audio:analysis:queue",
-        "audio:scan:queue",
         "audio:worker:heartbeat",
         "audio:cleanup:last_run",
         "enrichment:state",
@@ -1727,6 +1773,21 @@ export async function resetAllEnrichmentData(): Promise<{
         await redisInstance.del(...keysToDelete);
     }
 
+    // Clean completed/failed jobs from ALL BullMQ queues -- completed job hashes
+    // use jobId-based dedup, so stale entries prevent re-queuing after reset.
+    // Use clean() not obliterate() to preserve queue metadata and running workers.
+    for (const queue of [artistQueue, trackQueue, vibeQueue, podcastQueue]) {
+        try {
+            await queue.clean(0, 0, "completed");
+            await queue.clean(0, 0, "failed");
+            await queue.clean(0, 0, "wait");
+            await queue.clean(0, 0, "delayed");
+            await queue.clean(0, 0, "active");
+        } catch {
+            // Queue may not exist yet
+        }
+    }
+    // vibe-embedding is a separate queue not in the shared imports
     try {
         const { Queue } = await import("bullmq");
         const vQueue = new Queue("vibe-embedding", { connection: redisInstance as any });
@@ -1738,11 +1799,14 @@ export async function resetAllEnrichmentData(): Promise<{
 
     audioAnalysisCleanupService.resetCircuitBreaker();
 
-    logger.info(`[Enrichment] Full reset: ${tracksReset.count} tracks, embeddings truncated, ${failuresDeleted.count} failures cleared`);
+    // State key was deleted above. Don't re-initialize (that sets "running").
+    // Null state = idle/no active enrichment. User must explicitly start.
+
+    logger.info(`[Enrichment] Full reset: ${tracksReset.count} tracks, ${artistsReset.count} artists, embeddings truncated, ${failuresDeleted.count} failures cleared`);
 
     return {
         tracksReset: tracksReset.count,
-        embeddingsDeleted: 0,
+        artistsReset: artistsReset.count,
         failuresDeleted: failuresDeleted.count,
         moodBucketsDeleted: moodBucketsDeleted.count,
     };

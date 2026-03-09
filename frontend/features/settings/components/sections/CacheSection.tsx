@@ -519,12 +519,13 @@ export function CacheSection({ settings, onUpdate }: CacheSectionProps) {
     const handleResetEnrichment = async () => {
         if (!window.confirm(
             "This will wipe ALL enrichment data:\n\n" +
+            "- Artist metadata (bios, images, similar artists)\n" +
             "- Audio analysis results (BPM, key, energy, etc.)\n" +
             "- Track embeddings (vibe map, similarity)\n" +
             "- Mood tags and genre tags\n" +
             "- All failure records\n" +
             "- Scan validation status\n\n" +
-            "Artist metadata (bios, images) will be kept.\n\n" +
+            "Everything will be re-enriched from scratch.\n\n" +
             "Are you sure?"
         )) return;
 
@@ -880,6 +881,19 @@ export function CacheSection({ settings, onUpdate }: CacheSectionProps) {
                     </div>
                 ) : null}
 
+                {enrichmentProgress && (
+                    <div className="flex items-center gap-3 -mt-3 mb-4 px-1">
+                        <button
+                            onClick={handleResetEnrichment}
+                            disabled={resettingEnrichment || isEnrichmentActive}
+                            className="px-3 py-1.5 text-xs font-black bg-red-600/80 text-white rounded-lg uppercase tracking-wider
+                                hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        >
+                            {resettingEnrichment ? "Resetting..." : "Reset Enrichment Data"}
+                        </button>
+                    </div>
+                )}
+
                 {/* Cache Sizes */}
                 <SettingsRow
                     label="User cache size"
@@ -1149,14 +1163,6 @@ export function CacheSection({ settings, onUpdate }: CacheSectionProps) {
                             No stale jobs found
                         </p>
                     )}
-                    <button
-                        onClick={handleResetEnrichment}
-                        disabled={resettingEnrichment || isEnrichmentActive}
-                        className="px-3 py-1.5 text-xs font-black bg-red-600/80 text-white rounded-lg uppercase tracking-wider
-                            hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    >
-                        {resettingEnrichment ? "Resetting..." : "Reset Enrichment Data"}
-                    </button>
                     {error && <p className="text-xs font-mono text-red-400 uppercase tracking-wider">{error}</p>}
                 </div>
             </SettingsSection>

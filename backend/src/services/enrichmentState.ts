@@ -12,6 +12,9 @@ import { config } from "../config";
 const ENRICHMENT_STATE_KEY = "enrichment:state";
 const ENRICHMENT_CONTROL_CHANNEL = "enrichment:control";
 const AUDIO_ANALYSIS_CONTROL_CHANNEL = "audio:analysis:control";
+// Synchronous gate key -- Python checks this before any work path.
+// Eliminates pub/sub timing races between Node.js stop and Python work pickup.
+const AUDIO_ANALYSIS_GATE_KEY = "audio:analysis:gate";
 
 export type EnrichmentStatus = "idle" | "running" | "paused" | "stopping";
 export type EnrichmentPhase = "artists" | "tracks" | "scan" | "audio" | "vibe" | "podcasts" | null;
@@ -161,6 +164,8 @@ class EnrichmentStateService {
             pausedAt: new Date().toISOString(),
         });
 
+        // Set synchronous gate BEFORE pub/sub -- Python checks this key atomically
+        await this.redis.set(AUDIO_ANALYSIS_GATE_KEY, "paused");
         // Notify workers via pub/sub
         await this.publisher.publish(ENRICHMENT_CONTROL_CHANNEL, "pause");
         await this.publisher.publish(AUDIO_ANALYSIS_CONTROL_CHANNEL, "pause");
@@ -195,6 +200,8 @@ class EnrichmentStateService {
             pausedAt: undefined,
         });
 
+        // Clear synchronous gate BEFORE pub/sub -- Python sees "open" immediately
+        await this.redis.del(AUDIO_ANALYSIS_GATE_KEY);
         // Notify workers via pub/sub
         await this.publisher.publish(ENRICHMENT_CONTROL_CHANNEL, "resume");
         await this.publisher.publish(AUDIO_ANALYSIS_CONTROL_CHANNEL, "resume");
@@ -223,6 +230,8 @@ class EnrichmentStateService {
             stoppedAt: new Date().toISOString(),
         });
 
+        // Set synchronous gate BEFORE pub/sub -- Python checks this key atomically
+        await this.redis.set(AUDIO_ANALYSIS_GATE_KEY, "paused");
         // Notify workers via pub/sub
         await this.publisher.publish(ENRICHMENT_CONTROL_CHANNEL, "stop");
         // Pause (not stop) the Python audio analyzer -- "stop" would exit the process
@@ -274,6 +283,14 @@ class EnrichmentStateService {
             (now.getTime() - lastActivity.getTime()) / (1000 * 60);
 
         return minutesSinceActivity > 15;
+    }
+
+    /**
+     * Clear the synchronous gate so Python can process work again.
+     * Called by clearPauseState() when enrichment is explicitly resumed.
+     */
+    async clearGate(): Promise<void> {
+        await this.redis.del(AUDIO_ANALYSIS_GATE_KEY);
     }
 
     /**

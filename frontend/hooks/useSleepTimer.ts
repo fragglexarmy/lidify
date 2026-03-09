@@ -39,7 +39,6 @@ function startTimer(minutes: number) {
     endTime = Date.now() + minutes * 60 * 1000;
     tick();
     if (!tickInterval) tickInterval = setInterval(tick, 1000);
-    notify();
 }
 
 function stopTimer() {

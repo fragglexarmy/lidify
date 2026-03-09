@@ -212,6 +212,25 @@ export async function enrichSimilarArtist(artist: Artist): Promise<void> {
             }
         }
 
+        // Genre fallback: MusicBrainz curated genres (if Last.fm didn't return any)
+        if (genres.length === 0 && !artist.mbid.startsWith("temp-")) {
+            try {
+                const mbArtist = await musicBrainzService.getArtist(artist.mbid, ["genres"]);
+                if (mbArtist?.genres && Array.isArray(mbArtist.genres)) {
+                    genres = mbArtist.genres
+                        .sort((a: any, b: any) => (b.count || 0) - (a.count || 0))
+                        .slice(0, 5)
+                        .map((g: any) => g.name)
+                        .filter(Boolean);
+                    if (genres.length > 0) {
+                        logger.debug(`${logPrefix} MusicBrainz: ${genres.length} genres: ${genres.join(', ')}`);
+                    }
+                }
+            } catch (error: any) {
+                logger.debug(`${logPrefix} MusicBrainz genres: FAILED - ${error?.message || error}`);
+            }
+        }
+
         // Get similar artists from Last.fm
         let similarArtists: Array<{
             name: string;

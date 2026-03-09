@@ -1459,7 +1459,7 @@ class ApiClient {
         return this.request<{
             message: string;
             tracksReset: number;
-            embeddingsDeleted: number;
+            artistsReset: number;
             failuresDeleted: number;
             moodBucketsDeleted: number;
         }>("/enrichment/reset-all", {
