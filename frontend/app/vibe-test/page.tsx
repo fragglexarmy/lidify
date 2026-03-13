@@ -24,14 +24,15 @@ export default function VibeTestPage() {
     const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
     const [highlightedIds] = useState<Set<string>>(new Set());
 
+    const tracks = mapData?.tracks;
     const trackMap = useMemo(() => {
-        if (!mapData?.tracks) return new Map<string, MapTrack>();
+        if (!tracks) return new Map<string, MapTrack>();
         const map = new Map<string, MapTrack>();
-        for (const track of mapData.tracks) {
+        for (const track of tracks) {
             map.set(track.id, track);
         }
         return map;
-    }, [mapData?.tracks]);
+    }, [tracks]);
 
     const selectedTrack = selectedTrackId ? trackMap.get(selectedTrackId) ?? null : null;
 
