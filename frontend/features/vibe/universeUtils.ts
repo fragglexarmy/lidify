@@ -64,14 +64,9 @@ export function getTrackBloomColor(track: MapTrack): THREE.Color {
     );
 }
 
-/** Returns sphere radius based on energy. Range: 0.01 - 0.025 in world units. */
-export function getTrackSphereRadius(track: MapTrack): number {
-    const energy = track.energy ?? 0.5;
-    return 0.01 + energy * 0.015;
-}
-
 /**
  * Computes bounding sphere for a set of tracks (for zoom-to-cluster).
+ * Coordinates are in raw 0-1 space -- caller must scale if needed.
  */
 export function computeClusterBounds(
     tracks: MapTrack[],
