@@ -56,7 +56,7 @@ export function getTrackThreeColor(track: MapTrack): THREE.Color {
 export function getTrackColor(track: MapTrack): THREE.Color {
     const [r, g, b] = blendMoodColor(track);
     const energy = track.energy ?? 0.5;
-    const brightness = 0.15 + energy * 0.2;
+    const brightness = 0.25 + energy * 0.3;
     return new THREE.Color(
         (r / 255) * brightness,
         (g / 255) * brightness,

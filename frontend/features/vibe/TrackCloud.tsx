@@ -22,7 +22,7 @@ interface TrackCloudProps {
     onTrackHover: (track: MapTrack | null, point: THREE.Vector3 | null) => void;
 }
 
-const WORLD_SCALE = 200;
+const WORLD_SCALE = 400;
 
 const vertexShader = `
     attribute float size;
@@ -34,8 +34,8 @@ const vertexShader = `
         vColor = customColor;
         vOpacity = opacity;
         vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-        gl_PointSize = size * (200.0 / -mvPosition.z);
-        gl_PointSize = clamp(gl_PointSize, 1.0, 20.0);
+        gl_PointSize = size * (400.0 / -mvPosition.z);
+        gl_PointSize = clamp(gl_PointSize, 1.5, 40.0);
         gl_Position = projectionMatrix * mvPosition;
     }
 `;
@@ -46,10 +46,12 @@ const fragmentShader = `
     void main() {
         float d = length(gl_PointCoord - vec2(0.5));
         if (d > 0.5) discard;
-        float core = 1.0 - smoothstep(0.0, 0.2, d);
-        float halo = 1.0 - smoothstep(0.1, 0.5, d);
-        float alpha = (core * 0.9 + halo * 0.3) * vOpacity;
-        vec3 color = vColor * (1.0 + core * 0.5);
+        // Bright core with soft atmospheric halo
+        float core = 1.0 - smoothstep(0.0, 0.15, d);
+        float inner = 1.0 - smoothstep(0.05, 0.3, d);
+        float halo = 1.0 - smoothstep(0.15, 0.5, d);
+        float alpha = (core * 0.95 + inner * 0.4 + halo * 0.12) * vOpacity;
+        vec3 color = vColor * (1.0 + core * 1.2);
         gl_FragColor = vec4(color, alpha);
     }
 `;
@@ -72,7 +74,7 @@ export function TrackCloud({
         for (let i = 0; i < tracks.length; i++) {
             pos[i * 3] = tracks[i].x * WORLD_SCALE;
             pos[i * 3 + 1] = tracks[i].y * WORLD_SCALE;
-            pos[i * 3 + 2] = hashToFloat(tracks[i].id) * WORLD_SCALE * 0.1;
+            pos[i * 3 + 2] = hashToFloat(tracks[i].id) * WORLD_SCALE * 0.2;
         }
         return pos;
     }, [tracks]);
@@ -92,7 +94,7 @@ export function TrackCloud({
             colors[i * 3 + 2] = color.b;
 
             const energy = track.energy ?? 0.5;
-            sizes[i] = 0.6 + energy * 1.2;
+            sizes[i] = 2.0 + energy * 4.0;
             opacities[i] = 0.85;
         }
 
@@ -172,17 +174,17 @@ export function TrackCloud({
             if (isSelected) {
                 colors.setXYZ(i, 0.9, 0.9, 0.9);
                 opacities.setX(i, 1.0);
-                sizes.setX(i, (0.6 + energy * 1.2) * 2.5);
+                sizes.setX(i, (2.0 + energy * 4.0) * 2.0);
             } else if (isHighlighted) {
                 const c = getTrackHighlightColor(track);
                 colors.setXYZ(i, c.r, c.g, c.b);
                 opacities.setX(i, 0.9);
-                sizes.setX(i, 0.6 + energy * 1.2);
+                sizes.setX(i, 2.0 + energy * 4.0);
             } else {
                 const c = getTrackColor(track);
                 colors.setXYZ(i, c.r * 0.4, c.g * 0.4, c.b * 0.4);
                 opacities.setX(i, 0.25);
-                sizes.setX(i, (0.6 + energy * 1.2) * 0.6);
+                sizes.setX(i, (2.0 + energy * 4.0) * 0.6);
             }
         }
 
@@ -205,7 +207,7 @@ export function TrackCloud({
             const point = new THREE.Vector3(
                 track.x * WORLD_SCALE,
                 track.y * WORLD_SCALE,
-                hashToFloat(track.id) * WORLD_SCALE * 0.1
+                hashToFloat(track.id) * WORLD_SCALE * 0.2
             );
             onTrackHover(track, point);
         }

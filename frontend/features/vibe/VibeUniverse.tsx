@@ -7,6 +7,7 @@ import {
     PerspectiveCamera,
     OrbitControls,
     PointerLockControls,
+    Stars,
 } from "@react-three/drei";
 import { EffectComposer, Bloom } from "@react-three/postprocessing";
 import * as THREE from "three";
@@ -137,7 +138,7 @@ function SceneContent({
                         far={WORLD_SCALE * 5}
                     />
                     <PointerLockControls onLock={handleLock} onUnlock={handleUnlock} />
-                    <FlyMovement speed={WORLD_SCALE * 0.12} />
+                    <FlyMovement speed={WORLD_SCALE * 0.08} />
                 </>
             ) : (
                 <>
@@ -156,6 +157,26 @@ function SceneContent({
                     />
                 </>
             )}
+
+            {/* Deep background star layers for endless depth */}
+            <Stars
+                radius={WORLD_SCALE * 4}
+                depth={WORLD_SCALE * 3}
+                count={isMobile ? 3000 : 8000}
+                factor={WORLD_SCALE * 0.015}
+                saturation={0.15}
+                fade
+                speed={0.1}
+            />
+            <Stars
+                radius={WORLD_SCALE * 8}
+                depth={WORLD_SCALE * 6}
+                count={isMobile ? 1500 : 4000}
+                factor={WORLD_SCALE * 0.008}
+                saturation={0}
+                fade
+                speed={0.05}
+            />
 
             <TrackCloud
                 tracks={tracks}
