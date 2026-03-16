@@ -14,8 +14,8 @@ test("core smoke: login → play album → play/pause/next/prev", async ({ page 
     await page.waitForURL(/\/($|\?)/);
 
     // Navigate to albums and open the first one
-    await page.goto("/albums");
-    await expect(page.getByRole("heading", { name: "All Albums" })).toBeVisible();
+    await page.goto("/collection?tab=albums");
+    await expect(page.locator('a[href^="/album/"]').first()).toBeVisible({ timeout: 10_000 });
 
     const firstAlbum = page.locator('a[href^="/album/"]').first();
     const albumCount = await firstAlbum.count();
@@ -36,8 +36,8 @@ test("core smoke: login → play album → play/pause/next/prev", async ({ page 
     await expect(playPause).toHaveAttribute("title", "Pause");
 
     // Next/Previous should be available for tracks (library content)
-    const nextBtn = page.locator('button[title="Next"]');
-    const prevBtn = page.locator('button[title="Previous"]');
+    const nextBtn = page.getByLabel("Next track");
+    const prevBtn = page.getByLabel("Previous track");
     await expect(nextBtn).toBeVisible();
     await expect(prevBtn).toBeVisible();
 

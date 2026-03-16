@@ -34,11 +34,13 @@ test.describe("Queue", () => {
     test("queue page loads with Now Playing section when track is active", async ({ page }) => {
         await startPlayingFirstAlbum(page);
 
-        await page.goto("/queue");
-        await page.waitForLoadState("domcontentloaded");
+        // Client-side nav via the queue button to preserve React queue state
+        // (page.goto reloads the page and wipes in-memory queue context)
+        await page.getByTitle("Play queue").click();
+        await page.waitForURL(/\/queue/);
 
-        // Should show "Now Playing" section since a track is active
-        await expect(page.getByText("Now Playing")).toBeVisible({ timeout: 5_000 });
+        // Should show "Now Playing" heading since a track is active
+        await expect(page.getByRole("heading", { name: "Now Playing" })).toBeVisible({ timeout: 5_000 });
     });
 
     test("queue page shows track count", async ({ page }) => {

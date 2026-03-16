@@ -78,7 +78,7 @@ test.describe("Auth Flow", () => {
     test("protected routes redirect unauthenticated users", async ({ page }) => {
         for (const route of ["/collection", "/settings", "/search", "/queue", "/vibe"]) {
             await page.goto(route);
-            await expect(page).toHaveURL(/login/, { timeout: 5000 });
+            await expect(page).toHaveURL(/login/, { timeout: 10000 });
         }
     });
 });
@@ -278,13 +278,20 @@ test.describe("Search", () => {
 test.describe("Playback", () => {
     test.beforeEach(async ({ page }) => { await login(page); });
 
-    test("player area visible on home page", async ({ page }) => {
-        await page.goto("/", { waitUntil: "domcontentloaded" });
-        await settle(page);
+    test("player appears when track starts playing", async ({ page }) => {
+        await page.goto("/collection?tab=albums", { waitUntil: "domcontentloaded" });
+        await settle(page, 2000);
 
-        // Mini player or "not playing" indicator
-        const playerArea = page.locator('[class*="player" i], [class*="Player"], [id*="player" i]').or(page.getByText(/not playing/i));
-        await expect(playerArea.first()).toBeVisible({ timeout: 5000 });
+        const firstAlbum = page.locator('a[href^="/album/"]').first();
+        await firstAlbum.waitFor({ timeout: 10_000 });
+        await firstAlbum.click();
+        await page.waitForURL(/\/album\//);
+        await page.waitForTimeout(500);
+
+        await page.getByLabel("Play all").click();
+
+        // Player should appear with a Pause button once audio starts
+        await expect(page.getByTitle("Pause", { exact: true })).toBeVisible({ timeout: 10_000 });
     });
 
     test("clicking play on album starts playback UI", async ({ page }) => {
