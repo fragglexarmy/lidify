@@ -9,6 +9,7 @@ const REQUEST_DELAY_MS = 10;
 const PRECACHE_ASSETS = [
   '/manifest.webmanifest',
   '/assets/images/kima.webp',
+  '/offline.html',
 ];
 
 // Image route patterns to cache
@@ -116,8 +117,15 @@ self.addEventListener('install', (event) => {
       return cache.addAll(PRECACHE_ASSETS);
     })
   );
-  // Take control immediately
-  self.skipWaiting();
+  // Do NOT skipWaiting here -- let the app show an update banner and reload
+  // on user action to avoid disrupting mid-session state.
+});
+
+// Allow the app to trigger SW takeover after showing the update banner
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
 
 // Activate event - clean up old caches
@@ -145,6 +153,17 @@ self.addEventListener('fetch', (event) => {
 
   // Skip non-http(s) URLs (chrome-extension://, etc.)
   if (!url.protocol.startsWith('http')) return;
+
+  // Navigation requests: network-first with offline fallback
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request).catch(async () => {
+        const cache = await caches.open(CACHE_NAME);
+        return cache.match('/offline.html') ?? new Response('Offline', { status: 503 });
+      })
+    );
+    return;
+  }
 
   // Skip streaming endpoints
   if (url.pathname.includes('/stream')) return;

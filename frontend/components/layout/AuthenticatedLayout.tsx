@@ -161,7 +161,7 @@ export function AuthenticatedLayout({ children }: { children: ReactNode }) {
                 </a>
                 <div
                     className="h-screen bg-black overflow-hidden flex flex-col"
-                    style={{ paddingTop: "64px" }}
+                    style={{ paddingTop: "calc(64px + var(--titlebar-height, 0px))" }}
                 >
                     <MediaControlsHandler />
                     <TopBar />

@@ -1,7 +1,10 @@
 {
+  "id": "/",
   "name": "Kima",
   "short_name": "Kima",
-  "description": "Self-hosted music streaming with Lidarr integration",
+  "description": "Self-hosted music streaming",
+  "lang": "en",
+  "scope": "/",
   "start_url": "/",
   "display": "standalone",
   "display_override": ["window-controls-overlay", "standalone"],
@@ -54,6 +57,12 @@
     }
   ],
   "shortcuts": [
+    {
+      "name": "Vibe",
+      "short_name": "Vibe",
+      "url": "/vibe",
+      "icons": [{ "src": "assets/icons/icon-96.webp", "sizes": "96x96" }]
+    },
     {
       "name": "Search",
       "short_name": "Search",

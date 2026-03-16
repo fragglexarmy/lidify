@@ -180,14 +180,14 @@ export function TopBar() {
 
     return (
         <header
-            className="fixed top-0 left-0 right-0 bg-black flex items-center px-3 z-50"
+            className="fixed top-0 left-0 right-0 bg-black flex items-center px-3 z-50 pwa-titlebar-drag"
             style={{
                 height: isMobileOrTablet
                     ? "calc(58px + var(--standalone-safe-area-top, 0px))"
-                    : "64px",
+                    : "calc(64px + var(--titlebar-height, 0px))",
                 paddingTop: isMobileOrTablet
                     ? "var(--standalone-safe-area-top, 0px)"
-                    : undefined,
+                    : "var(--titlebar-height, 0px)",
             }}
         >
             {/* Mobile/Tablet Layout: Hamburger + Home + Search + Bell */}
