@@ -39,8 +39,7 @@ router.get("/public-config", requireAuth, async (_req, res) => {
   }
 });
 
-// Only admins can access system settings
-router.use(requireAuth);
+// Only admins can access system settings (requireAdmin includes auth check)
 router.use(requireAdmin);
 
 const systemSettingsSchema = z.object({
