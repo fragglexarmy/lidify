@@ -117,18 +117,23 @@ export async function seekToPercent(page: Page, percent: number): Promise<void> 
  *  Must be called after login (reads auth token from localStorage). */
 export async function skipIfEmptyLibrary(page: Page): Promise<void> {
     const token = await getAuthToken(page);
+    let isEmpty = false;
     try {
         const res = await page.request.get("/api/library/tracks?limit=1", {
             headers: { Authorization: `Bearer ${token}` },
         });
-        if (!res.ok()) return;
-        const data = await res.json() as { tracks?: unknown[]; total?: number };
-        const total = data.total ?? (data.tracks ?? []).length;
-        if (total === 0) {
-            test.skip(true, "No music in library -- skipping (empty CI container)");
+        if (res.ok()) {
+            const data = await res.json() as { tracks?: unknown[]; total?: number };
+            const total = data.total ?? (data.tracks ?? []).length;
+            isEmpty = total === 0;
         }
     } catch {
         // network error -- don't skip, let test proceed
+    }
+    // test.skip() must be called OUTSIDE the try/catch -- it works by throwing
+    // a SkipError internally, which the catch block above would otherwise swallow.
+    if (isEmpty) {
+        test.skip(true, "No music in library -- skipping (empty CI container)");
     }
 }
 
