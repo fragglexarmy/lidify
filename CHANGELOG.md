@@ -37,6 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **vibe-test prototype page removed**: The `/vibe-test` dev sandbox page and its associated R3F prototype components (`VibeUniverse`, `TrackCloud`, `TrackTooltip`, `universeUtils`) have been removed. The production galaxy view lives in `GravityGridScene`.
+- **NowPlayingTab simplified**: Removed legacy MusicCNN sections from the vibe sidebar -- radar chart (recharts), mood spectrum bars, audio features grid (BPM/key/energy/danceability/valence/arousal), and match score badge. These all showed "--" because `audioFeatures` is no longer populated since the vibe system moved to CLAP. The tab now shows album art and track info only.
+- **README**: Vibe section rewritten with Map, Galaxy, Drift, and Blend subsections and fresh screenshots. All 19 screenshots retaken at 1440x900 desktop / 390x844 mobile with correct logo rendering.
+
+### Removed
+
+- `recharts` dependency (zero usages after NowPlayingTab cleanup).
+- Dead dev artifacts: `backend/test_dedup_manual.ts`, `backend/src/scripts/testDataCleanup.ts`.
 
 ## [1.6.4] - 2026-03-12
 
