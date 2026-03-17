@@ -1,11 +1,10 @@
 name: Integration Tests
 
 on:
-    push:
-        branches: [main]
     pull_request:
         branches: [main]
         types: [labeled]
+    workflow_dispatch:
 
 concurrency:
     group: integration-${{ github.ref }}
