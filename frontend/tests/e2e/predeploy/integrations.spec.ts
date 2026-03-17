@@ -61,35 +61,30 @@ test.describe("Integrations", () => {
 
         await page.goto("/settings");
 
-        // Find Lidarr section and expand if needed
-        const lidarrSection = page.locator("text=Lidarr").first();
-        await lidarrSection.click();
+        const lidarrContainer = page.locator('#lidarr');
+        await expect(lidarrContainer).toBeVisible({ timeout: 5000 });
 
-        // Fill in test credentials
-        const urlInput = page.locator('input[placeholder*="url" i], input[name*="lidarr" i][name*="url" i]').first();
-        const apiKeyInput = page.locator('input[placeholder*="api" i], input[name*="apikey" i], input[type="password"]').first();
+        const urlInput = lidarrContainer.locator('input[type="url"], input[type="text"]').first();
+        const apiKeyInput = lidarrContainer.locator('input[type="password"], input[placeholder*="api" i]').first();
 
-        if (await urlInput.isVisible()) {
+        if (await urlInput.isVisible({ timeout: 2000 })) {
             await urlInput.fill(process.env.KIMA_TEST_LIDARR_URL!);
         }
-        if (await apiKeyInput.isVisible()) {
+        if (await apiKeyInput.isVisible({ timeout: 2000 })) {
             await apiKeyInput.fill(process.env.KIMA_TEST_LIDARR_API_KEY!);
         }
 
-        // Click test connection button
-        const testBtn = page.getByRole("button", { name: /test/i });
-        if (await testBtn.isVisible()) {
-            await testBtn.click();
+        const testBtn = lidarrContainer.getByRole("button", { name: /test connection/i });
+        await expect(testBtn).toBeVisible({ timeout: 3000 });
+        await testBtn.click();
 
-            // Should show success or connection result
-            await page.waitForTimeout(3000);
-            const pageText = await page.textContent("body");
-            const hasResult = pageText?.includes("success") ||
-                             pageText?.includes("connected") ||
-                             pageText?.includes("failed") ||
-                             pageText?.includes("error");
-            expect(hasResult).toBeTruthy();
-        }
+        await page.waitForTimeout(3000);
+        const pageText = await page.textContent("body");
+        const hasResult = pageText?.includes("Connected") ||
+                         pageText?.includes("Failed") ||
+                         pageText?.includes("error") ||
+                         pageText?.includes("success");
+        expect(hasResult).toBeTruthy();
     });
 
     test("Soulseek connection test", async ({ page }, testInfo) => {
@@ -98,34 +93,25 @@ test.describe("Integrations", () => {
 
         await page.goto("/settings");
 
-        // Find Soulseek section
-        const soulseekSection = page.locator("text=Soulseek").first();
-        if (await soulseekSection.isVisible()) {
-            await soulseekSection.click();
+        const soulseekContainer = page.locator('#soulseek');
+        await expect(soulseekContainer).toBeVisible({ timeout: 5000 });
 
-            // Fill credentials
-            const userInput = page.locator('input[placeholder*="username" i]');
-            const passInput = page.locator('input[placeholder*="password" i], input[type="password"]');
+        const userInput = soulseekContainer.locator('input[placeholder*="username" i], input[type="text"]').first();
+        const passInput = soulseekContainer.locator('input[type="password"]').first();
 
-            if (await userInput.first().isVisible()) {
-                await userInput.first().fill(process.env.KIMA_TEST_SOULSEEK_USER!);
-            }
-            if (await passInput.first().isVisible()) {
-                await passInput.first().fill(process.env.KIMA_TEST_SOULSEEK_PASS!);
-            }
-
-            // Test connection
-            const testBtn = page.getByRole("button", { name: /test/i });
-            if (await testBtn.isVisible()) {
-                await testBtn.click();
-                await page.waitForTimeout(5000);
-
-                const pageText = await page.textContent("body");
-                const hasResult = pageText?.includes("success") ||
-                                 pageText?.includes("connected") ||
-                                 pageText?.includes("failed");
-                expect(hasResult).toBeTruthy();
-            }
+        if (await userInput.isVisible({ timeout: 2000 })) {
+            await userInput.fill(process.env.KIMA_TEST_SOULSEEK_USER!);
         }
+        if (await passInput.isVisible({ timeout: 2000 })) {
+            await passInput.fill(process.env.KIMA_TEST_SOULSEEK_PASS!);
+        }
+
+        const testBtn = soulseekContainer.getByRole("button", { name: /test connection/i });
+        await expect(testBtn).toBeVisible({ timeout: 3000 });
+        await testBtn.click();
+
+        // Soulseek handshake can take 10-15 seconds
+        const resultLocator = soulseekContainer.locator("text=/Connected|Connection failed|error/i");
+        await expect(resultLocator).toBeVisible({ timeout: 20_000 });
     });
 });
