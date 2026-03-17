@@ -1,4 +1,5 @@
 import { test, expect, Page } from "@playwright/test";
+import { skipIfEmptyLibrary } from "./fixtures/test-helpers";
 
 const username = process.env.KIMA_TEST_USERNAME || "playwright";
 const password = process.env.KIMA_TEST_PASSWORD || "playwright-test-pw";
@@ -170,6 +171,7 @@ test.describe("Collection & Library", () => {
     });
 
     test("albums tab shows album cards with links", async ({ page }) => {
+        await skipIfEmptyLibrary(page);
         await page.goto("/collection?tab=albums", { waitUntil: "domcontentloaded" });
         await settle(page, 3000);
         const albumLinks = page.locator('a[href^="/album/"]');
@@ -180,6 +182,7 @@ test.describe("Collection & Library", () => {
     });
 
     test("artists tab shows artist cards", async ({ page }) => {
+        await skipIfEmptyLibrary(page);
         await page.goto("/collection?tab=artists", { waitUntil: "domcontentloaded" });
         await settle(page, 3000);
         const artistLinks = page.locator('a[href^="/artist/"]');
@@ -197,6 +200,7 @@ test.describe("Collection & Library", () => {
     });
 
     test("album detail page has play button and track list", async ({ page }) => {
+        await skipIfEmptyLibrary(page);
         const netErrors = collectNetworkErrors(page);
         await page.goto("/collection?tab=albums", { waitUntil: "domcontentloaded" });
         await settle(page, 3000);
@@ -218,6 +222,7 @@ test.describe("Collection & Library", () => {
     });
 
     test("artist detail page loads", async ({ page }) => {
+        await skipIfEmptyLibrary(page);
         await page.goto("/collection?tab=artists", { waitUntil: "domcontentloaded" });
         await settle(page, 3000);
 
@@ -279,6 +284,7 @@ test.describe("Playback", () => {
     test.beforeEach(async ({ page }) => { await login(page); });
 
     test("player appears when track starts playing", async ({ page }) => {
+        await skipIfEmptyLibrary(page);
         await page.goto("/collection?tab=albums", { waitUntil: "domcontentloaded" });
         await settle(page, 2000);
 
@@ -295,6 +301,7 @@ test.describe("Playback", () => {
     });
 
     test("clicking play on album starts playback UI", async ({ page }) => {
+        await skipIfEmptyLibrary(page);
         const consoleErrors = collectConsoleErrors(page);
 
         await page.goto("/collection?tab=albums", { waitUntil: "domcontentloaded" });
@@ -318,6 +325,7 @@ test.describe("Playback", () => {
     });
 
     test("play/pause toggle works", async ({ page }) => {
+        await skipIfEmptyLibrary(page);
         await page.goto("/collection?tab=albums", { waitUntil: "domcontentloaded" });
         await settle(page, 3000);
 
@@ -342,6 +350,7 @@ test.describe("Playback", () => {
     });
 
     test("next/prev buttons visible during playback", async ({ page }) => {
+        await skipIfEmptyLibrary(page);
         await page.goto("/collection?tab=albums", { waitUntil: "domcontentloaded" });
         await settle(page, 3000);
 
@@ -508,6 +517,7 @@ test.describe("Mobile Layout", () => {
     });
 
     test("mobile: collection page works at small viewport", async ({ page }) => {
+        await skipIfEmptyLibrary(page);
         await page.goto("/collection?tab=albums", { waitUntil: "domcontentloaded" });
         await settle(page, 3000);
 
@@ -516,6 +526,7 @@ test.describe("Mobile Layout", () => {
     });
 
     test("mobile: album detail has no overflow", async ({ page }) => {
+        await skipIfEmptyLibrary(page);
         await page.goto("/collection?tab=albums", { waitUntil: "domcontentloaded" });
         await settle(page, 3000);
 

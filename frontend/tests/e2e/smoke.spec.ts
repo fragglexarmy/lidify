@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { skipIfEmptyLibrary } from "./fixtures/test-helpers";
 
 const username = process.env.KIMA_TEST_USERNAME || "predeploy";
 const password = process.env.KIMA_TEST_PASSWORD || "predeploy-password";
@@ -12,6 +13,8 @@ test("core smoke: login → play album → play/pause/next/prev", async ({ page 
 
     // Login redirects to / (assuming onboarding was already completed by the API smoke test)
     await page.waitForURL(/\/($|\?)/);
+
+    await skipIfEmptyLibrary(page);
 
     // Navigate to albums and open the first one
     await page.goto("/collection?tab=albums");

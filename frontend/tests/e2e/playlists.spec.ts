@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { loginAsTestUser, getAuthToken } from "./fixtures/test-helpers";
+import { loginAsTestUser, getAuthToken, skipIfEmptyLibrary } from "./fixtures/test-helpers";
 
 const TEST_PLAYLIST_NAME = `e2e-test-${Date.now()}`;
 
@@ -72,6 +72,8 @@ test.describe("Playlists", () => {
         }
         const created = await res.json();
         const playlistId: string = created.id;
+
+        await skipIfEmptyLibrary(page);
 
         // Navigate to the albums collection
         await page.goto("/collection?tab=albums");
@@ -232,6 +234,14 @@ test.describe("Playlists", () => {
         }
         const tracksData = await tracksRes.json();
         const trackList: Array<{ id: string }> = tracksData.tracks ?? tracksData;
+
+        if (trackList.length === 0) {
+            await page.request.delete(`/api/playlists/${playlistId}`, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            test.skip(true, "No tracks in library -- skipping (empty CI container)");
+            return;
+        }
 
         for (const t of trackList.slice(0, 3)) {
             await page.request.post(`/api/playlists/${playlistId}/items`, {

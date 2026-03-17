@@ -113,4 +113,23 @@ export async function seekToPercent(page: Page, percent: number): Promise<void> 
     await page.waitForTimeout(300);
 }
 
+/** Skip the current test if the library has no music.
+ *  Must be called after login (reads auth token from localStorage). */
+export async function skipIfEmptyLibrary(page: Page): Promise<void> {
+    const token = await getAuthToken(page);
+    try {
+        const res = await page.request.get("/api/library/tracks?limit=1", {
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok()) return;
+        const data = await res.json() as { tracks?: unknown[]; total?: number };
+        const total = data.total ?? (data.tracks ?? []).length;
+        if (total === 0) {
+            test.skip(true, "No music in library -- skipping (empty CI container)");
+        }
+    } catch {
+        // network error -- don't skip, let test proceed
+    }
+}
+
 export { username, password, baseUrl };
