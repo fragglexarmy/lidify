@@ -104,6 +104,25 @@ export function getLocalImagePath(nativePath: string): string | null {
     return fullPath;
 }
 
+/**
+ * Check if a native image path points to an existing file on disk.
+ * Returns false for non-native paths, null, or missing files.
+ */
+export function nativeFileExists(nativePath: string | null | undefined): boolean {
+    if (!nativePath || !nativePath.startsWith("native:")) return false;
+
+    const relativePath = nativePath.replace("native:", "");
+    const basePath = getCoversBasePath();
+    const resolvedBase = path.resolve(basePath);
+    const fullPath = path.resolve(basePath, relativePath);
+
+    if (!fullPath.startsWith(resolvedBase + path.sep) && fullPath !== resolvedBase) {
+        return false;
+    }
+
+    return fs.existsSync(fullPath);
+}
+
 
 /**
  * Check for a local artist image file in the artist's music directory.
