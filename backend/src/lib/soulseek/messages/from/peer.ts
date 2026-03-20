@@ -1,12 +1,14 @@
 import * as zlib from 'zlib'
+import { promisify } from 'util'
 
 import type { FileAttribute } from '../common'
 import { TransferDirection } from '../common'
 import { MessageParser } from '../message-parser'
 
 const MAX_DECOMPRESS_SIZE = 10 * 1024 * 1024 // 10 MB
+const unzip = promisify(zlib.unzip)
 
-export type FromPeerMessage = ReturnType<(typeof fromPeerMessage)[keyof typeof fromPeerMessage]>
+export type FromPeerMessage = Awaited<ReturnType<(typeof fromPeerMessage)[keyof typeof fromPeerMessage]>>
 
 export type SharedFileListRequest = {
   kind: 'sharedFileListRequest'
@@ -72,12 +74,9 @@ export const fromPeerMessage = {
   sharedFileListRequest: (): SharedFileListRequest => {
     return { kind: 'sharedFileListRequest' }
   },
-  // TODO: Replace zlib.unzipSync with async zlib.unzip (promisified) to avoid
-  // blocking the event loop on large search responses. Requires making this
-  // function async, which cascades to fromPeerMessageParser and its callers.
-  fileSearchResponse: (msg_: MessageParser): FileSearchResponse => {
+  fileSearchResponse: async (msg_: MessageParser): Promise<FileSearchResponse> => {
     const content = msg_.data.slice(msg_.pointer)
-    const buffer = zlib.unzipSync(content, { maxOutputLength: MAX_DECOMPRESS_SIZE })
+    const buffer = await unzip(content, { maxOutputLength: MAX_DECOMPRESS_SIZE })
 
     const msg = new MessageParser(buffer)
     const username = msg.str()
@@ -159,7 +158,7 @@ export const fromPeerMessage = {
   },
 }
 
-export const fromPeerMessageParser = (msg: MessageParser) => {
+export const fromPeerMessageParser = async (msg: MessageParser) => {
   const size = msg.int32()
   if (size < 4) return
 

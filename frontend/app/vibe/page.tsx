@@ -3,7 +3,10 @@
 import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
 import { useVibeMap } from "@/features/vibe/useVibeMap";
-import { VibeMap } from "@/features/vibe/VibeMap";
+const VibeMap = dynamic(
+    () => import("@/features/vibe/VibeMap").then(m => ({ default: m.VibeMap })),
+    { ssr: false },
+);
 import { VibeToolbar } from "@/features/vibe/VibeToolbar";
 import { VibeSongPath } from "@/features/vibe/VibeSongPath";
 import { VibePanelSheet } from "@/features/vibe/VibePanelSheet";

@@ -242,14 +242,14 @@ export function AudioControlsProvider({ children }: { children: ReactNode }) {
             state.setPodcastEpisodeQueue(null);
             state.setQueue([track]);
             state.setCurrentIndex(0);
-            playback.setCurrentTime(0);
+            setCurrentTimeRef.current(0);
             state.setShuffleIndices([0]);
             state.setRepeatOneCount(0);
 
             const streamUrl = api.getStreamUrl(track.id);
             controllerRef.current?.load(streamUrl, true);
         },
-        [state, playback]
+        [state]
     );
 
     const playTracks = useCallback(
@@ -276,7 +276,7 @@ export function AudioControlsProvider({ children }: { children: ReactNode }) {
             state.setQueue(tracks);
             state.setCurrentIndex(startIndex);
             state.setCurrentTrack(tracks[startIndex]);
-            playback.setCurrentTime(0);
+            setCurrentTimeRef.current(0);
             state.setRepeatOneCount(0);
             state.setShuffleIndices(
                 generateShuffleIndices(tracks.length, startIndex)
@@ -285,7 +285,7 @@ export function AudioControlsProvider({ children }: { children: ReactNode }) {
             const streamUrl = api.getStreamUrl(tracks[startIndex].id);
             controllerRef.current?.load(streamUrl, true);
         },
-        [state, playback, generateShuffleIndices]
+        [state, generateShuffleIndices]
     );
 
     const playAudiobook = useCallback(
@@ -301,12 +301,12 @@ export function AudioControlsProvider({ children }: { children: ReactNode }) {
 
             const startTime = audiobook.progress?.currentTime || 0;
             pendingStartTimeRef.current = startTime;
-            playback.setCurrentTime(startTime);
+            setCurrentTimeRef.current(startTime);
 
             const streamUrl = api.getAudiobookStreamUrl(audiobook.id);
             controllerRef.current?.load(streamUrl, true);
         },
-        [state, playback]
+        [state]
     );
 
     const playPodcast = useCallback(
@@ -321,13 +321,13 @@ export function AudioControlsProvider({ children }: { children: ReactNode }) {
 
             const startTime = podcast.progress?.currentTime || 0;
             pendingStartTimeRef.current = startTime;
-            playback.setCurrentTime(startTime);
+            setCurrentTimeRef.current(startTime);
 
             const [podcastId, episodeId] = podcast.id.split(":");
             const streamUrl = api.getPodcastEpisodeStreamUrl(podcastId, episodeId);
             controllerRef.current?.load(streamUrl, true);
         },
-        [state, playback]
+        [state]
     );
 
     const pause = useCallback(() => {
@@ -420,7 +420,7 @@ export function AudioControlsProvider({ children }: { children: ReactNode }) {
                     ? Math.min(Math.max(time, 0), maxDuration)
                     : Math.max(time, 0);
 
-            playback.setCurrentTime(clampedTime);
+            setCurrentTimeRef.current(clampedTime);
 
             if (state.playbackType === "audiobook" && state.currentAudiobook) {
                 state.setCurrentAudiobook((prev) => {
@@ -461,7 +461,7 @@ export function AudioControlsProvider({ children }: { children: ReactNode }) {
 
             controllerRef.current?.seek(clampedTime);
         },
-        [playback, state]
+        [state, playback.duration]
     );
 
     const next = useCallback(() => {
@@ -505,17 +505,17 @@ export function AudioControlsProvider({ children }: { children: ReactNode }) {
 
         state.setCurrentIndex(nextIndex);
         state.setCurrentTrack(state.queue[nextIndex]);
-        playback.setCurrentTime(0);
+        setCurrentTimeRef.current(0);
 
         const streamUrl = api.getStreamUrl(state.queue[nextIndex].id);
         controllerRef.current?.load(streamUrl, true);
-    }, [state, playback, seek]);
+    }, [state, seek]);
 
     const previous = useCallback(() => {
         if (state.queue.length === 0) return;
 
-        if (playback.currentTime > 3) {
-            playback.setCurrentTime(0);
+        if (currentTimeRef.current > 3) {
+            setCurrentTimeRef.current(0);
             seek(0);
             return;
         }
@@ -530,7 +530,7 @@ export function AudioControlsProvider({ children }: { children: ReactNode }) {
             if (currentShufflePos > 0) {
                 prevIndex = state.shuffleIndices[currentShufflePos - 1];
             } else {
-                playback.setCurrentTime(0);
+                setCurrentTimeRef.current(0);
                 seek(0);
                 return;
             }
@@ -538,7 +538,7 @@ export function AudioControlsProvider({ children }: { children: ReactNode }) {
             if (state.currentIndex > 0) {
                 prevIndex = state.currentIndex - 1;
             } else {
-                playback.setCurrentTime(0);
+                setCurrentTimeRef.current(0);
                 seek(0);
                 return;
             }
@@ -546,11 +546,11 @@ export function AudioControlsProvider({ children }: { children: ReactNode }) {
 
         state.setCurrentIndex(prevIndex);
         state.setCurrentTrack(state.queue[prevIndex]);
-        playback.setCurrentTime(0);
+        setCurrentTimeRef.current(0);
 
         const streamUrl = api.getStreamUrl(state.queue[prevIndex].id);
         controllerRef.current?.load(streamUrl, true);
-    }, [state, playback, seek]);
+    }, [state, seek]);
 
     const addToQueue = useCallback(
         (track: Track) => {
@@ -561,7 +561,7 @@ export function AudioControlsProvider({ children }: { children: ReactNode }) {
                 state.setCurrentTrack(track);
                 state.setCurrentAudiobook(null);
                 state.setCurrentPodcast(null);
-                playback.setCurrentTime(0);
+                setCurrentTimeRef.current(0);
                 state.setShuffleIndices([0]);
 
                 const streamUrl = api.getStreamUrl(track.id);
@@ -612,7 +612,7 @@ export function AudioControlsProvider({ children }: { children: ReactNode }) {
                 });
             }
         },
-        [state, playback]
+        [state]
     );
 
     const removeFromQueue = useCallback(
