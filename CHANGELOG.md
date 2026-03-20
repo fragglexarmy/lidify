@@ -5,6 +5,15 @@ All notable changes to Kima will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.3] - 2026-03-20
+
+### Fixed
+
+- **Cover art 404s after volume wipe or permission change (#149)**: Artist enrichment and album cover fetch now check if native cover files actually exist on disk before preserving stale DB paths. Added `nativeFileExists()` utility, `repairBrokenCovers()` service, and `POST /enrichment/repair-covers` endpoint to scan and clear broken cover paths for re-fetch.
+- **ARM64 Docker builds missing core Python dependencies (#1)**: `tensorflow-cpu` has no Linux ARM64 wheels, and all pip installs were chained -- so tensorflow failure prevented redis, bullmq, and other core deps from installing. Split into three layers: core deps (always succeed), ML deps (torch/CLAP -- works on ARM64), and tensorflow/essentia (gracefully degrades on ARM64 with log message).
+- **Misleading "Remove docker-compose.override.yml" message on non-Docker installs (#147)**: Replaced Docker-specific text with generic "Service not detected" message for Audio Analysis and Vibe Similarity on Proxmox LXC and bare metal installs.
+- **Unused `artistHeroUrl` parameter in enrichAlbumCovers**: Cleaned up dead parameter that was passed but never used.
+
 ## [1.7.2] - 2026-03-18
 
 ### Fixed
