@@ -184,3 +184,6 @@ soularr/
 # Allow README files
 !README.md
 !readme.md
+
+# Claude Code internal task tracking
+.task/
