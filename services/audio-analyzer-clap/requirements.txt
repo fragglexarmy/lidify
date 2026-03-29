@@ -13,5 +13,5 @@ bullmq==2.19.5
 
 # Utilities
 python-dotenv>=1.0.0
-numpy>=1.24.0
+numpy>=1.25.0
 requests>=2.31.0

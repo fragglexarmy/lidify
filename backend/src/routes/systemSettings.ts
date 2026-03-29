@@ -8,7 +8,6 @@ import { invalidateSystemSettingsCache } from "../utils/systemSettings";
 import { queueCleaner } from "../jobs/queueCleaner";
 import { encrypt, decrypt } from "../utils/encryption";
 import { safeError } from "../utils/errors";
-import { validateUrlForFetch } from "../utils/ssrf";
 
 const router = Router();
 
@@ -481,11 +480,6 @@ router.post("/test-lidarr", async (req, res) => {
     // Normalize URL - remove trailing slash
     const normalizedUrl = url.replace(/\/+$/, "");
 
-    const ssrfError = await validateUrlForFetch(normalizedUrl);
-    if (ssrfError) {
-      return res.status(400).json({ error: `Invalid URL: ${ssrfError}` });
-    }
-
     const axios = require("axios");
     const response = await axios.get(`${normalizedUrl}/api/v1/system/status`, {
       headers: { "X-Api-Key": apiKey },
@@ -516,11 +510,6 @@ router.post("/lidarr-profiles", async (req, res) => {
     }
 
     const normalizedUrl = url.replace(/\/+$/, "");
-
-    const ssrfError = await validateUrlForFetch(normalizedUrl);
-    if (ssrfError) {
-      return res.status(400).json({ error: `Invalid URL: ${ssrfError}` });
-    }
 
     const axios = require("axios");
     const headers = { "X-Api-Key": apiKey };
@@ -652,11 +641,6 @@ router.post("/test-audiobookshelf", async (req, res) => {
 
     if (!url || !apiKey) {
       return res.status(400).json({ error: "URL and API key are required" });
-    }
-
-    const ssrfError = await validateUrlForFetch(url);
-    if (ssrfError) {
-      return res.status(400).json({ error: `Invalid URL: ${ssrfError}` });
     }
 
     const axios = require("axios");
