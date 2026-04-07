@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - nightly
 
+## [1.7.10] - 2026-04-07
+
+### Added
+
+- **Disc numbers and subtitles for multi-disc albums (#157, #170)**: The scanner now reads `disk.no` and `discsubtitle` tags from file metadata. Album views group tracks by disc with a header when multiple discs are present, and show compact `1-05` / `2-08` track labels for multi-disc releases. Single-disc albums are unchanged. Subsonic clients receive the `discNumber` attribute on songs and tracks are ordered by `[disc, trackNo]` across every code path (library, offline, share, and all Subsonic endpoints). A new additive migration adds two nullable columns (`Track.discNumber`, `Track.discSubtitle`) -- no rescan is required, but rescanning a library picks up the new fields. Thanks @loskutov.
+
+### Fixed
+
+- **Deezer preview CORS/ORB in hardened browsers (#173, #178)**: Previews were failing in LibreWolf, hardened Firefox, and Brave because Deezer's CDN doesn't send cross-origin headers and strict browsers block the direct `<audio>` load via Opaque Response Blocking. Previews now route through new backend proxy endpoints (`/api/artists/preview/.../stream` and `/api/playlists/.../preview/stream`) so audio loads same-origin with proper `Cache-Control: no-store`, 10s upstream timeout, and upstream-stream cleanup on client disconnect. The cached 24h preview URL lookup is bypassed for streaming (using a new `getFreshTrackPreview()` helper) so the Akamai token expiry that caused #172 no longer bites playback. The ownership check on pending-track preview uses a single generic "not found" message for both missing and wrong-playlist cases to avoid leaking existence of other users' track IDs. Thanks @cachamber.
+- **Artist sorting ignores "The" and is now case-insensitive (#174, #175)**: Library artist sort used raw SQL ordering with no normalization, so "alt-J" sorted to the end and "The Beatles" sorted under T. Both backend (`backend/src/routes/library/artists.ts` via parameterized `Prisma.sql`) and frontend (`frontend/app/collection/page.tsx`) now strip a leading "The " (case-insensitive) and compare case-insensitively, with a stable ID tiebreaker. Server-side ordering matches the UI and is applied before pagination. Thanks @cachamber.
+- **Album track order regression for NULL disc numbers**: The new `orderBy [discNumber asc, trackNo asc]` in #170 relied on Prisma's default sort behavior, which in Postgres puts NULLs LAST. On upgrade-without-rescan, all tracks have `discNumber = NULL`, which stayed correct; but for partially-rescanned libraries where some tracks gained a disc number and others did not, NULL-disc tracks would end up dumped at the end of the album instead of interleaved in track order. All six orderBy call sites (library/albums, offline, share, and three in subsonic/library) now use `{ sort: "asc", nulls: "first" }` to preserve pre-migration order.
+- **Finamp removed from README client list (#167)**: Finamp is a Jellyfin-only client and does not support the Subsonic/OpenSubsonic API. The README's two mentions of it were incorrect. Thanks @Chaphasilor.
+
+### Changed
+
+- **Docker build: pin CLAP/PyTorch stack to known-compatible versions (#178)**: Docker image now pins `torch==2.5.1+cpu`, `torchaudio==2.5.1+cpu`, `torchvision==0.20.1+cpu`, `numpy==1.24.4`, `scipy==1.10.1`, `pandas==2.0.3` and adds a build-time sanity check that imports `torch`, `torchaudio`, `numpy`, `scipy`, `pandas`, `laion_clap`, and `transformers.BertModel`. Prevents silent ML dependency resolution drift between builds. Thanks @cachamber.
+- **Security audit cleanup**: Removed ~553 lines of stale/vulnerable transitive dependencies from `backend/package-lock.json` and `frontend/package-lock.json` (4 high/1 critical backend, 3 high frontend). Lockfile-only changes, no package.json dependency bumps.
+- **Preview stream cleanup**: Both Deezer preview proxy endpoints now destroy the upstream axios stream on client disconnect (`res.on("close", ...)`), matching the existing audiobook stream pattern.
+
 ## [1.7.9] - 2026-04-06
 
 ### Fixed
