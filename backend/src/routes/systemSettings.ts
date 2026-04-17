@@ -265,13 +265,6 @@ router.post("/", async (req, res) => {
       logger.warn("[SYSTEM SETTINGS] Could not reinitialize Fanart service:", err);
     }
 
-    try {
-      const { resetPodcastIndexCache } = await import("../services/podcastindex");
-      resetPodcastIndexCache();
-    } catch (err) {
-      logger.warn("[SYSTEM SETTINGS] Could not reset PodcastIndex cache:", err);
-    }
-
     // If Audiobookshelf was disabled, clear all audiobook-related data
     if (data.audiobookshelfEnabled === false) {
       logger.debug(
