@@ -59,6 +59,15 @@ export interface DeezerGenre {
     imageUrl: string | null;
 }
 
+export interface DeezerPodcast {
+    id: number;
+    title: string;
+    description: string;
+    fans: number;
+    link: string;
+    pictureUrl: string | null;
+}
+
 export interface DeezerGenreWithRadios {
     id: number;
     name: string;
@@ -716,6 +725,55 @@ class DeezerService {
         } catch (error: any) {
             logger.error("Deezer editorial content error:", error.message);
             return { playlists: [], radios: [] };
+        }
+    }
+
+    async searchPodcasts(query: string, limit: number = 20): Promise<DeezerPodcast[]> {
+        try {
+            const response = await axios.get(`${DEEZER_API}/search/podcast`, {
+                params: { q: query, limit },
+                timeout: 10000,
+            });
+
+            return (response.data?.data || []).map((podcast: any) => ({
+                id: podcast.id,
+                title: podcast.title || "Unknown",
+                description: podcast.description || "",
+                fans: podcast.fans || 0,
+                link: podcast.link || "",
+                pictureUrl: podcast.picture_big || podcast.picture_medium || podcast.picture || null,
+            }));
+        } catch (error: any) {
+            logger.error("Deezer podcast search error:", error.message);
+            return [];
+        }
+    }
+
+    async getTopPodcasts(limit: number = 20): Promise<DeezerPodcast[]> {
+        const cacheKey = `podcasts:top:${limit}`;
+        const cached = await this.getCached(cacheKey);
+        if (cached) return JSON.parse(cached);
+
+        try {
+            const response = await axios.get(`${DEEZER_API}/chart/0/podcasts`, {
+                params: { limit },
+                timeout: 10000,
+            });
+
+            const results: DeezerPodcast[] = (response.data?.data || []).map((podcast: any) => ({
+                id: podcast.id,
+                title: podcast.title || "Unknown",
+                description: podcast.description || "",
+                fans: podcast.fans || 0,
+                link: podcast.link || "",
+                pictureUrl: podcast.picture_big || podcast.picture_medium || podcast.picture || null,
+            }));
+
+            await this.setCache(cacheKey, JSON.stringify(results));
+            return results;
+        } catch (error: any) {
+            logger.error("Deezer top podcasts error:", error.message);
+            return [];
         }
     }
 }

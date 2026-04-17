@@ -6,6 +6,7 @@ import { lastFmService } from "../services/lastfm";
 import { searchService, normalizeCacheQuery, type SearchResults } from "../services/search";
 import axios from "axios";
 import { redisClient } from "../utils/redis";
+import { deezerService } from "../services/deezer";
 
 const router = Router();
 
@@ -183,20 +184,58 @@ router.get("/discover", async (req, res) => {
         }
 
         if (type === "podcasts" || type === "all") {
-            promiseMap.podcasts = axios.get("https://itunes.apple.com/search", {
-                params: { term: query, media: "podcast", entity: "podcast", limit: searchLimit },
-                timeout: 5000,
-            }).then((resp) => resp.data.results.map((podcast: any) => ({
-                type: "podcast",
-                id: podcast.collectionId,
-                name: podcast.collectionName,
-                artist: podcast.artistName,
-                description: podcast.description,
-                coverUrl: podcast.artworkUrl600 || podcast.artworkUrl100,
-                feedUrl: podcast.feedUrl,
-                genres: podcast.genres || [],
-                trackCount: podcast.trackCount,
-            })));
+            promiseMap.podcasts = (async () => {
+                const [itunesResult, deezerResult] = await Promise.allSettled([
+                    axios.get("https://itunes.apple.com/search", {
+                        params: { term: query, media: "podcast", entity: "podcast", limit: searchLimit },
+                        timeout: 5000,
+                    }).then((resp) => resp.data.results || []),
+                    deezerService.searchPodcasts(query, searchLimit),
+                ]);
+
+                const itunesPodcasts = itunesResult.status === "fulfilled" ? itunesResult.value : [];
+                const deezerPodcasts = deezerResult.status === "fulfilled" ? deezerResult.value : [];
+
+                if (itunesResult.status === "rejected") {
+                    logger.warn("[SEARCH DISCOVER] iTunes podcast search failed:", itunesResult.reason?.message || itunesResult.reason);
+                }
+
+                const results = itunesPodcasts.map((podcast: any) => ({
+                    type: "podcast",
+                    id: podcast.collectionId,
+                    name: podcast.collectionName,
+                    artist: podcast.artistName,
+                    description: podcast.description,
+                    coverUrl: podcast.artworkUrl600 || podcast.artworkUrl100,
+                    feedUrl: podcast.feedUrl,
+                    genres: podcast.genres || [],
+                    trackCount: podcast.trackCount,
+                }));
+
+                const seen = new Set(results.map((r: any) =>
+                    (r.name || "").toLowerCase().replace(/[^a-z0-9]/g, "")
+                ));
+
+                for (const dp of deezerPodcasts) {
+                    const norm = dp.title.toLowerCase().replace(/[^a-z0-9]/g, "");
+                    if (norm && !seen.has(norm)) {
+                        seen.add(norm);
+                        results.push({
+                            type: "podcast",
+                            id: `deezer:${dp.id}`,
+                            name: dp.title,
+                            artist: "",
+                            description: dp.description,
+                            coverUrl: dp.pictureUrl,
+                            feedUrl: null,
+                            genres: [],
+                            trackCount: 0,
+                        });
+                    }
+                }
+
+                return results.slice(0, searchLimit);
+            })();
         }
 
         // Await all with allSettled so one failure doesn't block others

@@ -7,6 +7,7 @@ import { podcastCacheService } from "../services/podcastCache";
 import { parseRangeHeader } from "../utils/rangeParser";
 import { safeError } from "../utils/errors";
 import { validateUrlForFetch } from "../utils/ssrf";
+import { deezerService } from "../services/deezer";
 import axios from "axios";
 import fs from "fs";
 
@@ -120,7 +121,7 @@ router.get("/", requireAuth, async (req, res) => {
 
 /**
  * GET /podcasts/discover/top
- * Get top podcasts - just search iTunes like the search bar does
+ * Get top podcasts from Deezer charts + iTunes search
  */
 router.get("/discover/top", requireAuthOrToken, async (req, res) => {
     try {
@@ -129,21 +130,22 @@ router.get("/discover/top", requireAuthOrToken, async (req, res) => {
 
         logger.debug(`\n[TOP PODCASTS] Request (limit: ${podcastLimit})`);
 
-        // Simple iTunes search - same as the working search bar!
-        const itunesResponse = await axios.get(
-            "https://itunes.apple.com/search",
-            {
-                params: {
-                    term: "podcast",
-                    media: "podcast",
-                    entity: "podcast",
-                    limit: podcastLimit,
-                },
+        const [itunesResult, deezerResult] = await Promise.allSettled([
+            axios.get("https://itunes.apple.com/search", {
+                params: { term: "podcast", media: "podcast", entity: "podcast", limit: podcastLimit },
                 timeout: 5000,
-            }
-        );
+            }).then((resp) => resp.data.results || []),
+            deezerService.getTopPodcasts(podcastLimit),
+        ]);
 
-        const podcasts = itunesResponse.data.results.map((podcast: any) => ({
+        const itunesPodcasts = itunesResult.status === "fulfilled" ? itunesResult.value : [];
+        const deezerPodcasts = deezerResult.status === "fulfilled" ? deezerResult.value : [];
+
+        if (itunesResult.status === "rejected") {
+            logger.warn("[TOP PODCASTS] iTunes failed:", (itunesResult.reason as any)?.message || itunesResult.reason);
+        }
+
+        const podcasts = itunesPodcasts.map((podcast: any) => ({
             id: podcast.collectionId.toString(),
             title: podcast.collectionName,
             author: podcast.artistName,
@@ -155,8 +157,30 @@ router.get("/discover/top", requireAuthOrToken, async (req, res) => {
             isExternal: true,
         }));
 
-        logger.debug(`   Found ${podcasts.length} podcasts`);
-        res.json(podcasts);
+        const seen = new Set(podcasts.map((p: any) =>
+            (p.title || "").toLowerCase().replace(/[^a-z0-9]/g, "")
+        ));
+
+        for (const dp of deezerPodcasts) {
+            const norm = dp.title.toLowerCase().replace(/[^a-z0-9]/g, "");
+            if (norm && !seen.has(norm)) {
+                seen.add(norm);
+                podcasts.push({
+                    id: `deezer:${dp.id}`,
+                    title: dp.title,
+                    author: "",
+                    coverUrl: dp.pictureUrl,
+                    feedUrl: null,
+                    genres: [],
+                    episodeCount: 0,
+                    itunesId: null,
+                    isExternal: true,
+                });
+            }
+        }
+
+        logger.debug(`   Found ${podcasts.length} podcasts (iTunes: ${itunesPodcasts.length}, Deezer: ${deezerPodcasts.length})`);
+        res.json(podcasts.slice(0, podcastLimit));
     } catch (error) {
         safeError(res, "Error fetching top podcasts", error);
     }
@@ -191,50 +215,60 @@ router.get("/discover/genres", async (req, res) => {
             1502: "gaming hobbies podcast", // Leisure (Gaming & Hobbies)
         };
 
-        // Fetch podcasts for each genre using simple iTunes search - PARALLEL execution
         const genreFetchPromises = genreIds.map(async (genreId) => {
             const searchTerm = genreSearchTerms[genreId] || "podcast";
             logger.debug(`    Searching for "${searchTerm}"...`);
 
             try {
-                // Simple iTunes search - same as the working search bar!
-                const itunesResponse = await axios.get(
-                    "https://itunes.apple.com/search",
-                    {
-                        params: {
-                            term: searchTerm,
-                            media: "podcast",
-                            entity: "podcast",
-                            limit: 10,
-                        },
+                const [itunesResult, deezerResult] = await Promise.allSettled([
+                    axios.get("https://itunes.apple.com/search", {
+                        params: { term: searchTerm, media: "podcast", entity: "podcast", limit: 10 },
                         timeout: 5000,
+                    }).then((resp) => resp.data.results || []),
+                    deezerService.searchPodcasts(searchTerm, 10),
+                ]);
+
+                const itunesPodcasts = itunesResult.status === "fulfilled" ? itunesResult.value : [];
+                const deezerPodcasts = deezerResult.status === "fulfilled" ? deezerResult.value : [];
+
+                const podcasts = itunesPodcasts.map((podcast: any) => ({
+                    id: podcast.collectionId.toString(),
+                    title: podcast.collectionName,
+                    author: podcast.artistName,
+                    coverUrl: podcast.artworkUrl600 || podcast.artworkUrl100,
+                    feedUrl: podcast.feedUrl,
+                    genres: podcast.genres || [],
+                    episodeCount: podcast.trackCount || 0,
+                    itunesId: podcast.collectionId,
+                    isExternal: true,
+                }));
+
+                const seen = new Set(podcasts.map((p: any) =>
+                    (p.title || "").toLowerCase().replace(/[^a-z0-9]/g, "")
+                ));
+
+                for (const dp of deezerPodcasts) {
+                    const norm = dp.title.toLowerCase().replace(/[^a-z0-9]/g, "");
+                    if (norm && !seen.has(norm)) {
+                        seen.add(norm);
+                        podcasts.push({
+                            id: `deezer:${dp.id}`,
+                            title: dp.title,
+                            author: "",
+                            coverUrl: dp.pictureUrl,
+                            feedUrl: null,
+                            genres: [],
+                            episodeCount: 0,
+                            itunesId: null,
+                            isExternal: true,
+                        });
                     }
-                );
+                }
 
-                const podcasts = itunesResponse.data.results.map(
-                    (podcast: any) => ({
-                        id: podcast.collectionId.toString(),
-                        title: podcast.collectionName,
-                        author: podcast.artistName,
-                        coverUrl:
-                            podcast.artworkUrl600 || podcast.artworkUrl100,
-                        feedUrl: podcast.feedUrl,
-                        genres: podcast.genres || [],
-                        episodeCount: podcast.trackCount || 0,
-                        itunesId: podcast.collectionId,
-                        isExternal: true,
-                    })
-                );
-
-                logger.debug(
-                    `      Found ${podcasts.length} podcasts for genre ${genreId}`
-                );
-                return { genreId, podcasts };
+                logger.debug(`      Found ${podcasts.length} podcasts for genre ${genreId}`);
+                return { genreId, podcasts: podcasts.slice(0, 10) };
             } catch (error: any) {
-                logger.error(
-                    `       Error searching for ${searchTerm}:`,
-                    error.message
-                );
+                logger.error(`       Error searching for ${searchTerm}:`, error.message);
                 return { genreId, podcasts: [] };
             }
         });
@@ -289,24 +323,20 @@ router.get("/discover/genre/:genreId", async (req, res) => {
             `    Searching for "${searchTerm}" (offset: ${podcastOffset})...`
         );
 
-        // iTunes API doesn't support offset directly, so we request more and slice
-        // This is a limitation but works for reasonable pagination
         const totalToFetch = podcastOffset + podcastLimit;
 
-        const itunesResponse = await axios.get(
-            "https://itunes.apple.com/search",
-            {
-                params: {
-                    term: searchTerm,
-                    media: "podcast",
-                    entity: "podcast",
-                    limit: Math.min(totalToFetch, 200), // iTunes max is 200
-                },
+        const [itunesResult, deezerResult] = await Promise.allSettled([
+            axios.get("https://itunes.apple.com/search", {
+                params: { term: searchTerm, media: "podcast", entity: "podcast", limit: Math.min(totalToFetch, 200) },
                 timeout: 5000,
-            }
-        );
+            }).then((resp) => resp.data.results || []),
+            deezerService.searchPodcasts(searchTerm, Math.min(totalToFetch, 50)),
+        ]);
 
-        const allPodcasts = itunesResponse.data.results.map((podcast: any) => ({
+        const itunesPodcasts = itunesResult.status === "fulfilled" ? itunesResult.value : [];
+        const deezerPodcasts = deezerResult.status === "fulfilled" ? deezerResult.value : [];
+
+        const allPodcasts = itunesPodcasts.map((podcast: any) => ({
             id: podcast.collectionId.toString(),
             title: podcast.collectionName,
             author: podcast.artistName,
@@ -318,11 +348,29 @@ router.get("/discover/genre/:genreId", async (req, res) => {
             isExternal: true,
         }));
 
-        // Slice for pagination
-        const podcasts = allPodcasts.slice(
-            podcastOffset,
-            podcastOffset + podcastLimit
-        );
+        const seen = new Set(allPodcasts.map((p: any) =>
+            (p.title || "").toLowerCase().replace(/[^a-z0-9]/g, "")
+        ));
+
+        for (const dp of deezerPodcasts) {
+            const norm = dp.title.toLowerCase().replace(/[^a-z0-9]/g, "");
+            if (norm && !seen.has(norm)) {
+                seen.add(norm);
+                allPodcasts.push({
+                    id: `deezer:${dp.id}`,
+                    title: dp.title,
+                    author: "",
+                    coverUrl: dp.pictureUrl,
+                    feedUrl: null,
+                    genres: [],
+                    episodeCount: 0,
+                    itunesId: null,
+                    isExternal: true,
+                });
+            }
+        }
+
+        const podcasts = allPodcasts.slice(podcastOffset, podcastOffset + podcastLimit);
 
         logger.debug(
             `   Found ${podcasts.length} podcasts (total available: ${allPodcasts.length})`
@@ -335,23 +383,23 @@ router.get("/discover/genre/:genreId", async (req, res) => {
 
 /**
  * GET /podcasts/preview/:itunesId
- * Preview a podcast by iTunes ID (for discovery, before subscribing)
- * Returns basic podcast info without requiring a subscription
+ * Preview a podcast by iTunes or Deezer ID (for discovery, before subscribing)
+ * Deezer IDs are prefixed with "deezer:" -- resolved via Deezer API + iTunes name search
  */
 router.get("/preview/:itunesId", requireAuth, async (req, res) => {
     try {
         const { itunesId } = req.params;
 
+        if (itunesId.startsWith("deezer:")) {
+            return await previewDeezerPodcast(req, res, itunesId.slice(7));
+        }
+
         logger.debug(`\n [PODCAST PREVIEW] iTunes ID: ${itunesId}`);
 
-        // Try to fetch from iTunes API
         const itunesResponse = await axios.get(
             "https://itunes.apple.com/lookup",
             {
-                params: {
-                    id: itunesId,
-                    entity: "podcast",
-                },
+                params: { id: itunesId, entity: "podcast" },
                 timeout: 5000,
             }
         );
@@ -365,7 +413,6 @@ router.get("/preview/:itunesId", requireAuth, async (req, res) => {
 
         const podcastData = itunesResponse.data.results[0];
 
-        // Check if user is already subscribed
         const existingPodcast = await prisma.podcast.findFirst({
             where: {
                 OR: [{ id: itunesId }, { feedUrl: podcastData.feedUrl }],
@@ -385,7 +432,6 @@ router.get("/preview/:itunesId", requireAuth, async (req, res) => {
             isSubscribed = !!subscription;
         }
 
-        // Fetch description and episodes from RSS feed (iTunes API doesn't provide them)
         let description = "";
         let previewEpisodes: any[] = [];
         if (podcastData.feedUrl) {
@@ -394,11 +440,9 @@ router.get("/preview/:itunesId", requireAuth, async (req, res) => {
                     podcastData.feedUrl
                 );
                 if (feedResult.notModified) throw new Error("Unexpected 304 on preview fetch");
-                const feedData = feedResult;
-                description = feedData.podcast.description || "";
+                description = feedResult.podcast.description || "";
 
-                // Get first 3 episodes for preview
-                previewEpisodes = (feedData.episodes || [])
+                previewEpisodes = (feedResult.episodes || [])
                     .slice(0, 3)
                     .map((episode: any) => ({
                         title: episode.title,
@@ -411,7 +455,6 @@ router.get("/preview/:itunesId", requireAuth, async (req, res) => {
                 );
             } catch (error) {
                 logger.warn(`  Failed to fetch RSS feed for preview:`, error);
-                // Continue without description and episodes
             }
         }
 
@@ -432,6 +475,86 @@ router.get("/preview/:itunesId", requireAuth, async (req, res) => {
         safeError(res, "Error previewing podcast", error);
     }
 });
+
+async function previewDeezerPodcast(req: any, res: any, deezerId: string) {
+    logger.debug(`\n [PODCAST PREVIEW] Deezer ID: ${deezerId}`);
+
+    let deezerData: any;
+    try {
+        const resp = await axios.get(`https://api.deezer.com/podcast/${deezerId}`, { timeout: 5000 });
+        deezerData = resp.data;
+    } catch {
+        return res.status(404).json({ error: "Podcast not found on Deezer" });
+    }
+
+    if (!deezerData?.id || deezerData.error) {
+        return res.status(404).json({ error: "Podcast not found on Deezer" });
+    }
+
+    let feedUrl: string | null = null;
+    let resolvedItunesId: string | null = null;
+
+    try {
+        const itunesResp = await axios.get("https://itunes.apple.com/search", {
+            params: { term: deezerData.title, media: "podcast", entity: "podcast", limit: 5 },
+            timeout: 5000,
+        });
+        const match = (itunesResp.data.results || []).find((p: any) => {
+            const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+            return norm(p.collectionName) === norm(deezerData.title);
+        });
+        if (match) {
+            feedUrl = match.feedUrl;
+            resolvedItunesId = match.collectionId.toString();
+            logger.debug(`[PODCAST PREVIEW] Resolved Deezer "${deezerData.title}" to iTunes ${resolvedItunesId}`);
+        }
+    } catch (err: any) {
+        logger.warn("[PODCAST PREVIEW] iTunes resolution for Deezer podcast failed:", err.message);
+    }
+
+    const existingPodcast = feedUrl ? await prisma.podcast.findFirst({ where: { feedUrl } }) : null;
+    let isSubscribed = false;
+    if (existingPodcast) {
+        const subscription = await prisma.podcastSubscription.findUnique({
+            where: { userId_podcastId: { userId: req.user!.id, podcastId: existingPodcast.id } },
+        });
+        isSubscribed = !!subscription;
+    }
+
+    let description = deezerData.description || "";
+    let previewEpisodes: any[] = [];
+
+    if (feedUrl) {
+        try {
+            const feedResult = await rssParserService.parseFeed(feedUrl);
+            if (!feedResult.notModified) {
+                description = feedResult.podcast.description || description;
+                previewEpisodes = (feedResult.episodes || []).slice(0, 3).map((ep: any) => ({
+                    title: ep.title,
+                    publishedAt: ep.publishedAt,
+                    duration: ep.duration || 0,
+                }));
+            }
+        } catch {
+            logger.warn("[PODCAST PREVIEW] RSS feed fetch failed for resolved Deezer podcast");
+        }
+    }
+
+    res.json({
+        itunesId: resolvedItunesId,
+        deezerId: deezerData.id.toString(),
+        title: deezerData.title,
+        author: "",
+        description,
+        coverUrl: deezerData.picture_big || deezerData.picture_medium || deezerData.picture || null,
+        feedUrl,
+        genres: [],
+        episodeCount: 0,
+        previewEpisodes,
+        isSubscribed,
+        subscribedPodcastId: isSubscribed ? existingPodcast!.id : null,
+    });
+}
 
 /**
  * POST /podcasts/refresh-all

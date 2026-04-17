@@ -18,15 +18,15 @@ const getProxiedImageUrl = (imageUrl: string | undefined): string | null => {
 
 interface SearchResult {
     type?: string;
-    id: number;
+    id: number | string;
     name?: string;
     artist?: string;
     title?: string;
     author?: string;
     coverUrl: string;
-    feedUrl: string;
+    feedUrl: string | null;
     trackCount?: number;
-    itunesId?: number;
+    itunesId?: number | null;
 }
 
 function PodcastCard({
